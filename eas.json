@@ -1,0 +1,26 @@
+{
+  "cli": {
+    "version": ">= 21.0.2",
+    "appVersionSource": "remote"
+  },
+  "build": {
+    "development": {
+      "developmentClient": true,
+      "distribution": "internal"
+    },
+    "preview": {
+      "autoIncrement": true,
+      "distribution": "store"
+    },
+    "production": {
+      "autoIncrement": true,
+      "env": {
+        "EXPO_PUBLIC_REVENUECAT_APPLE_KEY": "appl_ssdsjzLGMcHWzDbiCfNLPWuNlCi"
+      }
+    }
+  },
+  "submit": {
+    "production": {},
+    "preview": {}
+  }
+}
