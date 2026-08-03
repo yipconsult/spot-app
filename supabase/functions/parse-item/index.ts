@@ -371,6 +371,7 @@ function findDianpingShopData(obj: unknown): Record<string, unknown> | null {
 }
 
 // ── RED SSR data extractor ──────────────────────────────────────
+// P2-C: Expanded to handle more RED data patterns
 
 function findNoteInNextData(obj: unknown): Record<string, unknown> | null {
   if (!obj || typeof obj !== 'object') return null;
@@ -378,6 +379,37 @@ function findNoteInNextData(obj: unknown): Record<string, unknown> | null {
 
   // Direct match: RED note data has noteId, title, desc
   if (o.noteId && (o.title || o.desc)) return o;
+
+  // P2-C: Match by noteInfo pattern
+  if (o.noteInfo && typeof o.noteInfo === 'object') {
+    const ni = o.noteInfo as Record<string, unknown>;
+    if (ni.noteId && (ni.title || ni.desc)) return ni;
+  }
+
+  // P2-C: Match by noteDetailMap pattern
+  if (o.noteDetailMap && typeof o.noteDetailMap === 'object') {
+    const entries = Object.values(o.noteDetailMap as Record<string, unknown>);
+    for (const entry of entries) {
+      if (!entry || typeof entry !== 'object') continue;
+      const e = entry as Record<string, unknown>;
+      if (e.noteId && (e.title || e.desc)) return e;
+      // Nested note structure: { note: { title, desc } }
+      if (e.note && typeof e.note === 'object') {
+        const note = e.note as Record<string, unknown>;
+        if (note.title || note.desc) return note;
+      }
+    }
+  }
+
+  // P2-C: Match by initialState / pageState patterns
+  if (o.initialState && typeof o.initialState === 'object') {
+    const found = findNoteInNextData(o.initialState);
+    if (found) return found;
+  }
+  if (o.pageState && typeof o.pageState === 'object') {
+    const found = findNoteInNextData(o.pageState);
+    if (found) return found;
+  }
 
   // Recurse into nested objects and arrays
   for (const key of Object.keys(o)) {
@@ -631,19 +663,32 @@ async function fetchAndScrapeHtml(url: string, platform?: Platform): Promise<str
         } catch { /* ignore */ }
       }
 
-      // Pattern B: __INITIAL_STATE__ (older RED SSR)
-      const scriptData = html.match(/<script[^>]*>window\.__INITIAL_STATE__\s*=\s*({[\s\S]*?})<\/script>/i);
-      if (scriptData) {
+      // Pattern B: Try multiple initial state patterns (RED changes these)
+      const scriptDataPatterns = [
+        /<script[^>]*>window\.__INITIAL_STATE__\s*=\s*({[\s\S]*?})<\/script>/i,
+        /<script[^>]+id="__INITIAL_STATE__"[^>]*>([\s\S]*?)<\/script>/i,
+        /<script[^>]*>window\._SSR_HYDRATED_DATA\s*=\s*({[\s\S]*?})<\/script>/i,
+      ];
+      for (const pattern of scriptDataPatterns) {
+        const match = html.match(pattern);
+        if (!match) continue;
         try {
-          const state = JSON.parse(scriptData[1]);
-          const noteInfo = state?.note?.noteDetailMap || state?.noteDetail || state?.note;
+          const state = JSON.parse(match[1]);
+          const noteInfo = state?.note?.noteDetailMap || state?.noteDetail || state?.note || state?.noteInfo;
           if (noteInfo) {
-            const note = Object.values(noteInfo)[0] as any;
+            const note = Array.isArray(noteInfo) ? noteInfo[0] : Object.values(noteInfo)[0] as any;
             if (note?.note?.title) { parts.push(`Post title: ${note.note.title}`); redDataFound = true; }
             if (note?.note?.desc) { parts.push(`Description: ${note.note.desc}`); redDataFound = true; }
             if (note?.note?.tagList?.length) parts.push(`Tags: ${note.note.tagList.map((t: any) => t.name || t).join(', ')}`);
             if (note?.note?.ipLocation) parts.push(`Location: ${note.note.ipLocation}`);
+            if (note?.note?.noteId) parts.push(`Note ID: ${note.note.noteId}`);
           }
+          // Also try direct state fields
+          if (state?.title || state?.desc) {
+            if (state.title) { parts.push(`Post title: ${state.title}`); redDataFound = true; }
+            if (state.desc) { parts.push(`Description: ${state.desc}`); redDataFound = true; }
+          }
+          break; // Stop after first successful match
         } catch { /* ignore */ }
       }
 

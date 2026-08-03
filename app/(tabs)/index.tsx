@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { View, FlatList, StyleSheet, RefreshControl, TextInput, Text, TouchableOpacity } from 'react-native';
+import { View, FlatList, StyleSheet, RefreshControl, TextInput, Text, TouchableOpacity, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { useShareIntentContext } from 'expo-share-intent';
@@ -44,7 +44,7 @@ export default function HomeScreen() {
       const textContent = [sharedText, metaTitle].filter(Boolean).join('\n');
       const urlFromText = extractUrl(textContent) || textContent.match(/https?:\/\/[^\s]+/)?.[0] || '';
       const rawUrl = sharedWebUrl || urlFromText;
-      let finalUrl = rawUrl ? normalizeUrl(rawUrl) : '';
+      const finalUrl = rawUrl ? normalizeUrl(rawUrl) : '';
 
       console.log('[HomeScreen] share intent data:', {
         finalUrl,
@@ -55,16 +55,28 @@ export default function HomeScreen() {
         type: shareIntent.type,
       });
 
+      // ── P2-A: Facebook/Threads share with no URL ─────────────────
+      // These platforms don't include the post URL in the share payload.
+      // Detect this and show a helpful message instead of navigating to save with empty data.
+      const lowerText = textContent.toLowerCase();
+      const isFacebookShare = lowerText.includes('facebook') || sharedWebUrl?.includes('facebook.com');
+      const isThreadsShare = lowerText.includes('threads') || sharedWebUrl?.includes('threads.net');
+
+      if (!finalUrl && (isFacebookShare || isThreadsShare)) {
+        shareProcessed.current = true;
+        resetShareIntent();
+        Alert.alert(
+          "Can't read this link directly",
+          "Facebook and Threads don't include the post link when sharing from the app.\n\nCopy the link from the post menu, then return to Spot and paste it.",
+          [{ text: 'OK' }]
+        );
+        return;
+      }
+      // ─────────────────────────────────────────────────────────────
+
       if (!finalUrl && !sharedText) {
         console.log('[HomeScreen] completely empty intent — nothing to process');
         return;
-      }
-
-      // Facebook/Threads share sheets often provide text but no webUrl.
-      // Use a manual lookup URL so the edge function extracts from the text.
-      if (!finalUrl && sharedText) {
-        finalUrl = `https://spot.app/manual/${Date.now()}`;
-        console.log('[HomeScreen] No URL in share intent, using manual lookup with text');
       }
 
       shareProcessed.current = true;
