@@ -9,27 +9,7 @@ import { useTheme } from '../../src/contexts/ThemeContext';
 import { UserSave } from '../../src/types';
 import { ItemCard } from '../../src/components/ItemCard';
 import { checkClipboard, extractUrl } from '../../src/lib/clipboard';
-
-/** Normalize Instagram URLs: strip tracking params, convert deep links to web URLs */
-function normalizeUrl(raw: string): string {
-  let url = raw.trim();
-  const deepLinkMatch = url.match(/^instagram:\/\/(?:media\?id=\d+|(reel|p|tv|stories)\/([A-Za-z0-9_-]+))/i);
-  if (deepLinkMatch) {
-    const type = deepLinkMatch[1] || 'p';
-    const code = deepLinkMatch[2];
-    if (code) url = `https://www.instagram.com/${type}/${code}/`;
-  }
-  try {
-    const u = new URL(url);
-    const trackingParams = ['igsh', 'igshid', 'utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term', 'fbclid', 'ref'];
-    let changed = false;
-    for (const p of trackingParams) {
-      if (u.searchParams.has(p)) { u.searchParams.delete(p); changed = true; }
-    }
-    if (changed) url = u.toString();
-  } catch { /* not a valid URL, return as-is */ }
-  return url;
-}
+import { normalizeUrl } from '../../src/lib/url';
 
 export default function HomeScreen() {
   const { user } = useAuth();
@@ -45,7 +25,6 @@ export default function HomeScreen() {
   const { hasShareIntent, shareIntent, isReady } = useShareIntentContext();
   const shareProcessed = useRef(false);
 
-  // Always log state so we can trace what's happening
   useEffect(() => {
     console.log('[HomeScreen] share intent state:', {
       hasShareIntent,
@@ -62,7 +41,6 @@ export default function HomeScreen() {
       const sharedWebUrl = shareIntent.webUrl || '';
       const metaTitle = shareIntent.meta?.title || '';
 
-      // Use social-aware URL extraction (prefers Instagram, RED, etc. URLs)
       const textContent = [sharedText, metaTitle].filter(Boolean).join('\n');
       const urlFromText = extractUrl(textContent) || textContent.match(/https?:\/\/[^\s]+/)?.[0] || '';
       const rawUrl = sharedWebUrl || urlFromText;
@@ -90,7 +68,7 @@ export default function HomeScreen() {
         params: { prefillUrl: finalUrl, sharedText: textContent.slice(0, 5000) },
       });
     }
-  }, [hasShareIntent, shareIntent, isReady]);
+  }, [hasShareIntent, shareIntent, isReady, router]);
 
   const fetchSaves = useCallback(async () => {
     if (!user) return;
@@ -103,7 +81,6 @@ export default function HomeScreen() {
     setLoading(false);
   }, [user]);
 
-  // Auto-refresh when tab is focused (after saving, etc.)
   useFocusEffect(useCallback(() => { fetchSaves(); }, [fetchSaves]));
 
   useEffect(() => {
@@ -123,7 +100,7 @@ export default function HomeScreen() {
         return (
           item?.name_original?.toLowerCase().includes(q) ||
           item?.name_en?.toLowerCase().includes(q) ||
-          item?.tags?.some((t) => t.toLowerCase().includes(q)) ||
+          item?.tags?.some((tag: string) => tag.toLowerCase().includes(q)) ||
           item?.district?.toLowerCase().includes(q)
         );
       })
@@ -134,18 +111,19 @@ export default function HomeScreen() {
       {/* Clipboard banner */}
       {clipUrl && (
         <TouchableOpacity style={styles.clipBanner} onPress={() => router.push({ pathname: '/save', params: { prefillUrl: clipUrl } })}>
-          <Ionicons name="link" size={18} color="#FFF" />
+          <Ionicons name="link" size={16} color="#FFF" />
           <Text style={styles.clipText}>Save this link to Spot</Text>
+          <Ionicons name="chevron-forward" size={16} color="#FFF" />
         </TouchableOpacity>
       )}
 
       {/* Search bar */}
       <View style={[styles.searchBar, { backgroundColor: t.surface, borderColor: t.border }]}>
-        <Ionicons name="search" size={18} color={t.textSecondary} />
+        <Ionicons name="search" size={18} color={t.textTertiary} />
         <TextInput
           style={[styles.searchInput, { color: t.text }]}
           placeholder="Search your spots..."
-          placeholderTextColor={t.textSecondary}
+          placeholderTextColor={t.textTertiary}
           value={search}
           onChangeText={setSearch}
         />
@@ -161,18 +139,18 @@ export default function HomeScreen() {
             onPress={() => router.push({ pathname: '/item/[id]', params: { id: item.saved_item_id } })}
           />
         )}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#FF6B35" />}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
         contentContainerStyle={filtered.length === 0 ? styles.emptyContainer : styles.listContent}
         ListEmptyComponent={
           <View style={styles.empty}>
-            <Ionicons name="bookmark-outline" size={64} color={t.textTertiary} />
+            <Ionicons name="bookmark-outline" size={48} color={t.textTertiary} />
             <Text style={[styles.emptyTitle, { color: t.text }]}>No spots saved yet</Text>
-            <Text style={[styles.emptySubtitle, { color: t.textSecondary }]}>Share a post from Instagram or RED{'\n'}to start building your list</Text>
+            <Text style={[styles.emptySubtitle, { color: t.textTertiary }]}>
+              Share a post from Instagram or RED{'\n'}to start building your list
+            </Text>
           </View>
         }
       />
-
-      {/* Share intent status — debug removed for production */}
 
       {/* FAB: Add */}
       <TouchableOpacity style={styles.fab} onPress={() => router.push('/save')} activeOpacity={0.8}>
@@ -199,10 +177,8 @@ const styles = StyleSheet.create({
   listContent: { paddingBottom: 100 },
   emptyContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   empty: { alignItems: 'center', paddingHorizontal: 40 },
-  emptyTitle: { fontSize: 20, fontWeight: '700', color: '#1A1A1A', marginTop: 16 },
-  emptySubtitle: { fontSize: 14, color: '#8E8E93', textAlign: 'center', marginTop: 8, lineHeight: 20 },
-  debugBanner: { backgroundColor: '#FFF3CD', padding: 8, marginHorizontal: 16, marginTop: 4, borderRadius: 6 },
-  debugText: { fontSize: 10, color: '#856404', fontFamily: 'monospace' },
+  emptyTitle: { fontSize: 20, fontWeight: '700', marginTop: 16 },
+  emptySubtitle: { fontSize: 14, textAlign: 'center', marginTop: 8, lineHeight: 20 },
   fab: {
     position: 'absolute', bottom: 24, right: 24,
     width: 56, height: 56, borderRadius: 28,

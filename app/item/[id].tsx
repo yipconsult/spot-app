@@ -5,11 +5,13 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { requestCalendarPermissionsAsync, getCalendarsAsync, createEventAsync, EntityTypes } from 'expo-calendar/legacy';
 import DateTimePicker, { DateTimePickerEvent } from '@react-native-community/datetimepicker';
 import { supabase } from '../../src/lib/supabase';
+import { useAuth } from '../../src/contexts/AuthContext';
 import { useTheme } from '../../src/contexts/ThemeContext';
 import { SavedItem, CATEGORY_LABELS, Category } from '../../src/types';
 
 export default function ItemDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
+  const { user } = useAuth();
   const t = useTheme();
   const router = useRouter();
   const [item, setItem] = useState<SavedItem | null>(null);
@@ -91,7 +93,6 @@ export default function ItemDetailScreen() {
     const url = Platform.OS === 'ios'
       ? `maps://?q=${query}`
       : `https://maps.google.com/?q=${query}`;
-    // Use Linking.openURL — not imported here, fallback to browser-style
     const { Linking } = require('react-native');
     Linking.openURL(url).catch(() => Alert.alert('Error', 'Could not open Maps.'));
   };
@@ -166,13 +167,16 @@ export default function ItemDetailScreen() {
   };
 
   const hasMissingInfo = item && (!item.address_en || !item.district || !item.price_hint || item.category === 'other' || !item.tags?.length);
+
   const handleDelete = () => {
     Alert.alert('Delete Spot', 'Remove this spot from your saves?', [
       { text: 'Cancel', style: 'cancel' },
       {
         text: 'Delete', style: 'destructive',
         onPress: async () => {
-          await supabase.from('user_saves').delete().eq('saved_item_id', id);
+          if (!user) return;
+          // Delete ONLY this user's save — don't wipe other users'
+          await supabase.from('user_saves').delete().eq('saved_item_id', id).eq('user_id', user.id);
           router.back();
         },
       },
@@ -180,14 +184,14 @@ export default function ItemDetailScreen() {
   };
 
   if (loading) {
-    return <View style={styles.centered}><Text style={{ color: '#8E8E93' }}>Loading...</Text></View>;
+    return <View style={[styles.centered, { backgroundColor: t.bgSecondary }]}><Text style={{ color: t.textSecondary }}>Loading...</Text></View>;
   }
 
   if (!item) {
     return (
-      <View style={styles.centered}>
+      <View style={[styles.centered, { backgroundColor: t.bgSecondary }]}>
         <Ionicons name="alert-circle" size={48} color="#FF3B30" />
-        <Text style={{ fontSize: 16, color: '#8E8E93', marginTop: 12 }}>Spot not found</Text>
+        <Text style={{ fontSize: 16, color: t.textSecondary, marginTop: 12 }}>Spot not found</Text>
       </View>
     );
   }
@@ -199,7 +203,7 @@ export default function ItemDetailScreen() {
     <ScrollView style={[styles.container, { backgroundColor: t.bgSecondary }]} contentContainerStyle={styles.content}>
       {/* Edit Toggle */}
       <TouchableOpacity style={styles.editToggle} onPress={() => editMode ? setEditMode(false) : startEdit()}>
-        <Ionicons name={editMode ? 'close' : 'pencil'} size={20} color="#FF6B35" />
+        <Ionicons name={editMode ? 'close' : 'create-outline'} size={16} color="#FF6B35" />
         <Text style={styles.editToggleText}>{editMode ? 'Cancel' : 'Edit'}</Text>
       </TouchableOpacity>
 
@@ -228,14 +232,14 @@ export default function ItemDetailScreen() {
           <Text style={styles.editLabel}>Tags (comma-separated)</Text>
           <TextInput style={styles.editInput} value={editTags} onChangeText={setEditTags} placeholder="coffee, outdoor, pet-friendly" placeholderTextColor="#C7C7CC" />
           <TouchableOpacity style={styles.saveEditBtn} onPress={handleSaveEdit}>
-            <Ionicons name="checkmark-circle" size={20} color="#FFF" />
+            <Ionicons name="checkmark" size={18} color="#FFF" />
             <Text style={styles.saveEditText}>Save Changes</Text>
           </TouchableOpacity>
         </>
       ) : (
         <>
           {/* Header */}
-          <Text style={styles.name}>{displayName}</Text>
+          <Text style={[styles.name, { color: t.text }]}>{displayName}</Text>
           {item.name_original && item.name_original !== item.name_en && (
             <Text style={styles.nameOrig}>{item.name_original}</Text>
           )}
@@ -251,11 +255,11 @@ export default function ItemDetailScreen() {
           {item.address_en && (
             <View style={styles.section}>
               <View style={styles.sectionHeader}>
-                <Ionicons name="location" size={18} color="#FF6B35" />
-                <Text style={styles.sectionTitle}>Address</Text>
+                <Ionicons name="location-outline" size={16} color="#636366" />
+                <Text style={[styles.sectionTitle, { color: t.text }]}>Address</Text>
               </View>
               <Text style={styles.addressText}>{item.address_en}</Text>
-              {item.address_original && <Text style={styles.addressText}>{item.address_original}</Text>}
+              {item.address_original && <Text style={[styles.addressText, { color: t.textTertiary }]}>{item.address_original}</Text>}
             </View>
           )}
 
@@ -263,12 +267,12 @@ export default function ItemDetailScreen() {
           {item.tags.length > 0 && (
             <View style={styles.section}>
               <View style={styles.sectionHeader}>
-                <Ionicons name="pricetags" size={18} color="#FF6B35" />
-                <Text style={styles.sectionTitle}>Tags</Text>
+                <Ionicons name="pricetag-outline" size={16} color="#636366" />
+                <Text style={[styles.sectionTitle, { color: t.text }]}>Tags</Text>
               </View>
               <View style={styles.tagRow}>
-                {item.tags.map((t, i) => (
-                  <View key={i} style={styles.tag}><Text style={styles.tagText}>{t}</Text></View>
+                {item.tags.map((tag, i) => (
+                  <View key={i} style={styles.tag}><Text style={styles.tagText}>{tag}</Text></View>
                 ))}
               </View>
             </View>
@@ -276,14 +280,14 @@ export default function ItemDetailScreen() {
 
           {/* Source */}
           <View style={styles.sourceRow}>
-            <Ionicons name="link" size={14} color="#8E8E93" />
+            <Ionicons name="link-outline" size={14} color="#8E8E93" />
             <Text style={styles.sourceText} numberOfLines={1}>{item.source_url}</Text>
           </View>
 
           {/* Look Up — fill missing info */}
           {hasMissingInfo && (
             <TouchableOpacity style={styles.lookupBtn} onPress={handleLookup} disabled={lookingUp}>
-              <Ionicons name="search" size={18} color="#FFF" />
+              <Ionicons name="search" size={16} color="#FFF" />
               <Text style={styles.lookupText}>{lookingUp ? 'Looking up...' : 'Look Up Missing Details'}</Text>
             </TouchableOpacity>
           )}
@@ -291,18 +295,18 @@ export default function ItemDetailScreen() {
           {/* Actions */}
           <View style={styles.actions}>
             <TouchableOpacity style={styles.actionBtn} onPress={handleOpenMaps}>
-              <Ionicons name="navigate" size={20} color="#FFF" />
+              <Ionicons name="map-outline" size={18} color="#FFF" />
               <Text style={styles.actionText}>Open in Maps</Text>
             </TouchableOpacity>
             <TouchableOpacity style={[styles.actionBtn, styles.calendarBtn]} onPress={() => setShowPicker(true)}>
-              <Ionicons name="calendar" size={20} color="#FFF" />
+              <Ionicons name="calendar-outline" size={18} color="#FFF" />
               <Text style={styles.actionText}>Plan This</Text>
             </TouchableOpacity>
           </View>
 
           {/* Delete */}
           <TouchableOpacity style={styles.deleteBtn} onPress={handleDelete}>
-            <Ionicons name="trash-outline" size={18} color="#FF3B30" />
+            <Ionicons name="trash-outline" size={16} color="#FF3B30" />
             <Text style={styles.deleteText}>Remove from My Spots</Text>
           </TouchableOpacity>
         </>

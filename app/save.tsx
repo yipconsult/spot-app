@@ -1,48 +1,12 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { View, TextInput, TouchableOpacity, Text, StyleSheet, Alert, KeyboardAvoidingView, Platform, ScrollView, AppState } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useRouter, useLocalSearchParams, useFocusEffect } from 'expo-router';
-import { useShareIntentContext } from 'expo-share-intent';
+import { useRouter, useLocalSearchParams } from 'expo-router';
 import { supabase } from '../src/lib/supabase';
 import { useAuth } from '../src/contexts/AuthContext';
 import { useTheme } from '../src/contexts/ThemeContext';
 import { ParseResult, Category, CATEGORY_LABELS } from '../src/types';
-import { checkClipboard, isSocialUrl, extractUrl } from '../src/lib/clipboard';
-import * as Clipboard from 'expo-clipboard';
-
-/** Normalize Instagram URLs: strip tracking params, convert deep links to web URLs */
-function normalizeUrl(raw: string): string {
-  let url = raw.trim();
-
-  // Convert instagram:// deep links to web URLs
-  // instagram://reel/CODE → https://www.instagram.com/reel/CODE/
-  // instagram://user?username=XXX → https://www.instagram.com/XXX/
-  const deepLinkMatch = url.match(/^instagram:\/\/(?:media\?id=\d+|(reel|p|tv|stories)\/([A-Za-z0-9_-]+))/i);
-  if (deepLinkMatch) {
-    const type = deepLinkMatch[1] || 'p';
-    const code = deepLinkMatch[2];
-    if (code) {
-      url = `https://www.instagram.com/${type}/${code}/`;
-    }
-  }
-
-  // Strip tracking/query params that can interfere with oEmbed/scraping
-  // Keep the path clean: remove ?igsh, ?igshid, ?utm_*, ?fbclid, etc.
-  try {
-    const u = new URL(url);
-    const trackingParams = ['igsh', 'igshid', 'utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term', 'fbclid', 'ref'];
-    let changed = false;
-    for (const p of trackingParams) {
-      if (u.searchParams.has(p)) {
-        u.searchParams.delete(p);
-        changed = true;
-      }
-    }
-    if (changed) url = u.toString();
-  } catch { /* not a valid URL, return as-is */ }
-
-  return url;
-}
+import { normalizeUrl } from '../src/lib/url';
 
 function detectPlatformFromUrl(url: string): string {
   const u = url.toLowerCase();
@@ -52,7 +16,7 @@ function detectPlatformFromUrl(url: string): string {
   if (u.includes('xhslink.com') || u.includes('xiaohongshu.com')) return 'red';
   if (u.includes('pin.it') || u.includes('pinterest.com')) return 'pinterest';
   if (u.includes('youtube.com') || u.includes('youtu.be')) return 'youtube_reels';
-  if (u.includes('openrice.com')) return 'manual'; // stored as manual but we know it's OpenRice
+  if (u.includes('openrice.com')) return 'manual';
   if (u.includes('google.com/maps') || u.includes('goo.gl/maps')) return 'manual';
   return 'manual';
 }
@@ -69,138 +33,16 @@ export default function SaveScreen() {
   const [parseHint, setParseHint] = useState<string | null>(null);
 
   const lastFilledUrl = useRef<string | null>(null);
-  const { hasShareIntent, shareIntent, resetShareIntent, isReady } = useShareIntentContext();
+  const isSavingRef = useRef(false);
+  const parsingRef = useRef(false);
 
-  // On focus: check for new share/deep-link/clipboard data and auto-parse
-  useFocusEffect(
-    useCallback(() => {
-      const checkAndParse = async () => {
-        const paramUrl = params.url || params.prefillUrl;
-        const decodedUrl = paramUrl ? decodeURIComponent(paramUrl) : '';
-
-        // Extract URL from share intent — check ALL possible sources
-        let shareUrl = '';
-        let shareTextForParse = '';
-        if (isReady && hasShareIntent) {
-          // Log full share intent for debugging
-          console.log('[SaveScreen] ShareIntent data:', {
-            webUrl: shareIntent.webUrl,
-            type: shareIntent.type,
-            textPreview: (shareIntent.text || '').slice(0, 200),
-            metaTitle: shareIntent.meta?.title || '',
-            hasFiles: !!(shareIntent.files?.length),
-          });
-
-          // 1. webUrl (most reliable — direct URL attachment)
-          if (shareIntent.webUrl) {
-            shareUrl = shareIntent.webUrl;
-            console.log('[SaveScreen] Using shareIntent.webUrl:', shareUrl);
-          }
-
-          // 2. Extract URL from text — but use social-aware extraction
-          if (!shareUrl && shareIntent.text) {
-            const extracted = extractUrl(shareIntent.text);
-            if (extracted) {
-              shareUrl = extracted;
-              console.log('[SaveScreen] Extracted from shareIntent.text:', shareUrl);
-            }
-          }
-
-          // 3. Check meta.title for URLs (Instagram sometimes puts URL here)
-          if (!shareUrl && shareIntent.meta?.title) {
-            const titleUrl = shareIntent.meta.title.match(/https?:\/\/[^\s]+/)?.[0];
-            if (titleUrl) {
-              shareUrl = titleUrl;
-              console.log('[SaveScreen] Extracted from meta.title:', shareUrl);
-            }
-          }
-
-          // If still no URL, use text as-is for Gemini parsing context
-          if (!shareUrl && shareIntent.text) {
-            shareTextForParse = shareIntent.text;
-            console.log('[SaveScreen] No URL in share intent, using text for parse');
-          }
-        }
-
-        // Normalize the URL (strip tracking params, convert deep links)
-        const normalizedUrl = shareUrl ? normalizeUrl(shareUrl) : '';
-        const finalShareUrl = normalizedUrl || shareUrl; // prefer normalized
-
-        // Priority: param URL → share intent URL → text-based URL
-        const useUrl = decodedUrl || finalShareUrl ||
-          (shareTextForParse ? shareTextForParse.match(/https?:\/\/[^\s]+/)?.[0] : '') || '';
-
-        if (useUrl && useUrl !== lastFilledUrl.current) {
-          lastFilledUrl.current = useUrl;
-          // Reset for new parse
-          setResult(null);
-          setUrl(useUrl);
-          if (hasShareIntent && isReady) resetShareIntent();
-          console.log('[SaveScreen] Auto-parsing URL:', useUrl);
-          handleParseWithText(useUrl, shareIntent.text || shareTextForParse || undefined);
-          return;
-        }
-
-        if (useUrl === lastFilledUrl.current) {
-          console.log('[SaveScreen] URL already processed, skipping:', useUrl.slice(0, 80));
-          return;
-        }
-
-        // Clipboard fallback — wait 1.5s for share intent first, then fall back
-        if (isReady) {
-          // Small delay: let ShareIntentProvider populate if it's going to
-          await new Promise(resolve => setTimeout(resolve, 1500));
-
-          // Re-check share intent (may have arrived late)
-          if (hasShareIntent && !lastFilledUrl.current) {
-            const lateUrl = shareIntent.webUrl || '';
-            const lateText = shareIntent.text || '';
-            if (lateUrl || lateText) {
-              const extracted = lateUrl || extractUrl(lateText) || '';
-              const normalized = extracted ? normalizeUrl(extracted) : '';
-              lastFilledUrl.current = normalized;
-              setResult(null);
-              setUrl(normalized);
-              resetShareIntent();
-              console.log('[SaveScreen] Late share intent, auto-parsing:', normalized);
-              handleParseWithText(normalized, lateText);
-              return;
-            }
-          }
-
-          const clipUrl = await checkClipboard();
-          if (clipUrl && clipUrl !== lastFilledUrl.current) {
-            lastFilledUrl.current = clipUrl;
-            setResult(null);
-            setUrl(clipUrl);
-            // Clear clipboard to prevent stale reuse on next share
-            Clipboard.setStringAsync('').catch(() => {});
-            console.log('[SaveScreen] Auto-parsing from clipboard:', clipUrl);
-            handleParseWithText(clipUrl);
-          }
-        }
-      };
-
-      checkAndParse();
-    }, [params.url, params.prefillUrl, hasShareIntent, shareIntent, isReady])
-  );
-
-  // Reset state when app returns from background (new share may have arrived)
+  // Keep parsingRef in sync with state (for AppState guard)
   useEffect(() => {
-    const sub = AppState.addEventListener('change', (state) => {
-      if (state === 'active') {
-        lastFilledUrl.current = null;  // allow re-processing
-        setResult(null);               // clear old form
-        setParsing(false);             // clear stale loading state
-        console.log('[SaveScreen] App became active — reset for new share');
-      }
-    });
-    return () => sub.remove();
-  }, []);
+    parsingRef.current = parsing;
+  }, [parsing]);
 
-  const handleParse = () => handleParseWithText(url);
-
-  const handleParseWithText = async (parseUrl: string, sharedText?: string) => {
+  // Auto-parse when navigated here with a prefill URL (from HomeScreen share handling)
+  const handleParseWithText = useCallback(async (parseUrl: string, sharedText?: string) => {
     setParsing(true);
     const cleanUrl = normalizeUrl(parseUrl);
     try {
@@ -222,7 +64,36 @@ export default function SaveScreen() {
     } finally {
       setParsing(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    const rawPrefill = params.prefillUrl || params.url || '';
+    const prefill = rawPrefill ? decodeURIComponent(rawPrefill) : '';
+    const sharedText = params.sharedText || '';
+
+    if (prefill && prefill !== lastFilledUrl.current) {
+      lastFilledUrl.current = prefill;
+      setResult(null);
+      setParseHint(null);
+      setUrl(prefill);
+      handleParseWithText(prefill, sharedText || undefined);
+    }
+  }, [params.prefillUrl, params.url, params.sharedText, handleParseWithText]);
+
+  // Reset state when app returns from background — BUT only if not mid-parse
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state === 'active' && !parsingRef.current) {
+        lastFilledUrl.current = null;
+        setResult(null);
+        setParsing(false);
+        console.log('[SaveScreen] App became active — reset for new share');
+      }
+    });
+    return () => sub.remove();
+  }, []);
+
+  const handleParse = () => handleParseWithText(url);
 
   const handleLookup = async () => {
     const searchName = result?.name_en || result?.name_original;
@@ -252,95 +123,136 @@ export default function SaveScreen() {
   const handleSave = async () => {
     if (!user || !result) return;
 
-    const cleanUrl = normalizeUrl(url.trim());
+    // Lock: prevent double-tap / race-condition duplicates
+    if (isSavingRef.current) return;
+    isSavingRef.current = true;
 
-    const { data: existing } = await supabase
-      .from('saved_items').select('id').eq('source_url', cleanUrl).single();
-    let itemId = existing?.id;
+    try {
+      const cleanUrl = normalizeUrl(url.trim());
 
-    if (!itemId) {
-      // Detect platform from URL for the card display
-      const platform = detectPlatformFromUrl(cleanUrl);
-      const thumbnailUrl = (result as any).thumbnail_url || null;
+      const { data: existing } = await supabase
+        .from('saved_items').select('id').eq('source_url', cleanUrl).single();
+      let itemId = existing?.id;
 
-      const { data: inserted, error: itemErr } = await supabase
-        .from('saved_items').insert({
-          source_url: cleanUrl,
-          source_platform: platform as any,
-          name_original: result.name_original,
-          name_en: result.name_en,
-          address_original: result.address_original,
-          address_en: result.address_en,
-          category: result.category,
-          district: result.district,
-          price_hint: result.price_hint,
-          tags: result.tags,
-          raw_text: result.raw_text,
-          parsed_json: thumbnailUrl ? { thumbnail_url: thumbnailUrl } : null,
-        }).select('id').single();
-      if (itemErr) { Alert.alert('Error', itemErr.message); return; }
-      itemId = inserted!.id;
+      if (!itemId) {
+        const platform = detectPlatformFromUrl(cleanUrl);
+        const thumbnailUrl = (result as any).thumbnail_url || null;
+
+        const { data: inserted, error: itemErr } = await supabase
+          .from('saved_items').insert({
+            source_url: cleanUrl,
+            source_platform: platform as any,
+            name_original: result.name_original,
+            name_en: result.name_en,
+            address_original: result.address_original,
+            address_en: result.address_en,
+            category: result.category,
+            district: result.district,
+            price_hint: result.price_hint,
+            tags: result.tags,
+            raw_text: result.raw_text,
+            parsed_json: thumbnailUrl ? { thumbnail_url: thumbnailUrl } : null,
+          }).select('id').single();
+        if (itemErr) { Alert.alert('Error', itemErr.message); return; }
+        itemId = inserted!.id;
+      }
+
+      const { data: defaultList } = await supabase
+        .from('user_lists').select('id').eq('user_id', user.id).eq('is_shared', false).limit(1).single();
+
+      // Upsert prevents duplicate user_saves for the same item
+      // Requires UNIQUE(user_id, saved_item_id) constraint in Supabase
+      const { error: saveErr } = await supabase.from('user_saves').upsert({
+        user_id: user.id,
+        saved_item_id: itemId,
+        list_id: defaultList?.id ?? null,
+      }, { onConflict: 'user_id,saved_item_id' });
+
+      if (saveErr) { Alert.alert('Error', saveErr.message); return; }
+      router.back();
+    } finally {
+      isSavingRef.current = false;
     }
-
-    // Link to default list
-    const { data: defaultList } = await supabase
-      .from('user_lists').select('id').eq('user_id', user.id).eq('is_shared', false).limit(1).single();
-
-    const { error: saveErr } = await supabase.from('user_saves').insert({
-      user_id: user.id, saved_item_id: itemId, list_id: defaultList?.id ?? null,
-    });
-    if (saveErr) { Alert.alert('Error', saveErr.message); return; }
-    router.back();
   };
 
   if (parsing) {
     return (
       <View style={[styles.loadingContainer, { backgroundColor: t.bgSecondary }]}>
-        <Ionicons name="hourglass" size={48} color={t.accent} />
+        <Ionicons name="sparkles" size={32} color="#FF6B35" />
         <Text style={[styles.loadingText, { color: t.textSecondary }]}>Reading post...</Text>
       </View>
     );
   }
 
-  // Only show edit form if we have useful data — otherwise show URL input with error
   const hasUsefulData = result && (result.name_en || result.name_original || result.address_en || result.address_original);
 
   if (result && hasUsefulData) {
     return (
-      <KeyboardAvoidingView style={[styles.container, { backgroundColor: t.bgSecondary }]} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-        <ScrollView contentContainerStyle={styles.content}>
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={[styles.container, { backgroundColor: t.bgSecondary }]}>
+        <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
           <Text style={[styles.label, { color: t.text }]}>Edit before saving</Text>
           <Text style={[styles.sublabel, { color: t.textSecondary }]}>AI filled what it could. Fix anything that's wrong.</Text>
 
           {parseHint && (
             <View style={styles.hintBanner}>
-              <Ionicons name="bulb-outline" size={16} color="#007AFF" />
+              <Ionicons name="information-circle" size={18} color="#007AFF" />
               <Text style={styles.hintText}>{parseHint}</Text>
             </View>
           )}
 
+          {/* Name (English) + Look Up button in a row */}
           <Text style={[styles.editLabel, { color: t.textSecondary }]}>Name (English)</Text>
           <View style={styles.nameRow}>
-            <TextInput style={[styles.editInput, styles.nameInput, { backgroundColor: t.bg, color: t.text }]} value={result.name_en ?? ''} onChangeText={(v) => setResult({ ...result, name_en: v })} placeholder="Restaurant name" placeholderTextColor={t.textTertiary} />
+            <TextInput
+              style={[styles.editInput, styles.nameInput, { backgroundColor: t.bg, color: t.text }]}
+              value={result.name_en ?? ''}
+              onChangeText={(v) => setResult({ ...result, name_en: v })}
+              placeholder="Restaurant name"
+              placeholderTextColor={t.textTertiary}
+            />
             <TouchableOpacity style={styles.lookupBtn} onPress={handleLookup} disabled={parsing}>
-              <Ionicons name="search" size={16} color="#FFF" />
+              <Ionicons name="search" size={14} color="#FFF" />
               <Text style={styles.lookupText}>{parsing ? '...' : 'Look Up'}</Text>
             </TouchableOpacity>
           </View>
 
           <Text style={[styles.editLabel, { color: t.textSecondary }]}>Name (中文 / 中文名)</Text>
-          <TextInput style={[styles.editInput, { backgroundColor: t.bg, color: t.text }]} value={result.name_original ?? ''} onChangeText={(v) => setResult({ ...result, name_original: v })} placeholder="餐廳名稱" placeholderTextColor={t.textTertiary} />
+          <TextInput
+            style={[styles.editInput, { backgroundColor: t.bg, color: t.text }]}
+            value={result.name_original ?? ''}
+            onChangeText={(v) => setResult({ ...result, name_original: v })}
+            placeholder="餐廳名稱"
+            placeholderTextColor={t.textTertiary}
+          />
 
           <Text style={[styles.editLabel, { color: t.textSecondary }]}>Address (English)</Text>
-          <TextInput style={[styles.editInput, { backgroundColor: t.bg, color: t.text }]} value={result.address_en ?? ''} onChangeText={(v) => setResult({ ...result, address_en: v })} placeholder="Street, area, Hong Kong" placeholderTextColor={t.textTertiary} />
+          <TextInput
+            style={[styles.editInput, { backgroundColor: t.bg, color: t.text }]}
+            value={result.address_en ?? ''}
+            onChangeText={(v) => setResult({ ...result, address_en: v })}
+            placeholder="Street, area, Hong Kong"
+            placeholderTextColor={t.textTertiary}
+          />
 
           <Text style={[styles.editLabel, { color: t.textSecondary }]}>Address (地址)</Text>
-          <TextInput style={[styles.editInput, { backgroundColor: t.bg, color: t.text }]} value={result.address_original ?? ''} onChangeText={(v) => setResult({ ...result, address_original: v })} placeholder="街道、地區" placeholderTextColor={t.textTertiary} />
+          <TextInput
+            style={[styles.editInput, { backgroundColor: t.bg, color: t.text }]}
+            value={result.address_original ?? ''}
+            onChangeText={(v) => setResult({ ...result, address_original: v })}
+            placeholder="街道、地區"
+            placeholderTextColor={t.textTertiary}
+          />
 
-          <Text style={[styles.editLabel, { color: t.textSecondary }]}>District / 地區 (free text)</Text>
-          <TextInput style={[styles.editInput, { backgroundColor: t.bg, color: t.text }]} value={result.district ?? ''} onChangeText={(v) => setResult({ ...result, district: v || null })} placeholder="e.g. 尖沙咀, Central, Mong Kok..." placeholderTextColor={t.textTertiary} />
+          <Text style={[styles.editLabel, { color: t.textSecondary }]}>District / 地區</Text>
+          <TextInput
+            style={[styles.editInput, { backgroundColor: t.bg, color: t.text }]}
+            value={result.district ?? ''}
+            onChangeText={(v) => setResult({ ...result, district: v || null })}
+            placeholder="e.g. 尖沙咀, Central, Mong Kok..."
+            placeholderTextColor={t.textTertiary}
+          />
 
-          <Text style={styles.editLabel}>Category</Text>
+          <Text style={[styles.editLabel, { color: t.textSecondary }]}>Category</Text>
           <View style={styles.chipRow}>
             {(Object.keys(CATEGORY_LABELS) as Category[]).map((cat) => (
               <TouchableOpacity key={cat} style={[styles.chip, result.category === cat && styles.chipActive]} onPress={() => setResult({ ...result, category: cat })}>
@@ -350,16 +262,28 @@ export default function SaveScreen() {
           </View>
 
           <Text style={[styles.editLabel, { color: t.textSecondary }]}>Price hint</Text>
-          <TextInput style={[styles.editInput, { backgroundColor: t.bg, color: t.text }]} value={result.price_hint ?? ''} onChangeText={(v) => setResult({ ...result, price_hint: v || null })} placeholder="$ / $$ / $$$ / HK$100-200" placeholderTextColor={t.textTertiary} />
+          <TextInput
+            style={[styles.editInput, { backgroundColor: t.bg, color: t.text }]}
+            value={result.price_hint ?? ''}
+            onChangeText={(v) => setResult({ ...result, price_hint: v || null })}
+            placeholder="$ / $$ / $$$ / HK$100-200"
+            placeholderTextColor={t.textTertiary}
+          />
 
           <Text style={[styles.editLabel, { color: t.textSecondary }]}>Tags (comma-separated)</Text>
-          <TextInput style={[styles.editInput, { backgroundColor: t.bg, color: t.text }]} value={(result.tags || []).join(', ')} onChangeText={(v) => setResult({ ...result, tags: v.split(',').map(s => s.trim()).filter(Boolean) })} placeholder="coffee, outdoor, pet-friendly, 打卡" placeholderTextColor={t.textTertiary} />
+          <TextInput
+            style={[styles.editInput, { backgroundColor: t.bg, color: t.text }]}
+            value={(result.tags || []).join(', ')}
+            onChangeText={(v) => setResult({ ...result, tags: v.split(',').map(s => s.trim()).filter(Boolean) })}
+            placeholder="coffee, outdoor, pet-friendly, 打卡"
+            placeholderTextColor={t.textTertiary}
+          />
 
           <Text style={[styles.editLabel, { color: t.textSecondary }]}>Source URL</Text>
-          <Text style={[styles.urlText, { color: t.textSecondary }]} numberOfLines={1}>{url}</Text>
+          <Text style={[styles.urlText, { color: t.textTertiary }]} numberOfLines={1}>{url}</Text>
 
           <TouchableOpacity style={styles.saveBtn} onPress={handleSave}>
-            <Ionicons name="bookmark" size={20} color="#FFF" />
+            <Ionicons name="bookmark" size={18} color="#FFF" />
             <Text style={styles.saveBtnText}>Save to My Spots</Text>
           </TouchableOpacity>
 
@@ -374,29 +298,28 @@ export default function SaveScreen() {
   // Parse failed with no useful data — show URL input with error hint
   if (result && !hasUsefulData) {
     return (
-      <KeyboardAvoidingView style={[styles.container, { backgroundColor: t.bgSecondary }]} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-        <ScrollView contentContainerStyle={styles.content}>
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={[styles.container, { backgroundColor: t.bgSecondary }]}>
+        <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
           <Text style={[styles.label, { color: t.text }]}>Paste a link</Text>
           <Text style={[styles.sublabel, { color: t.textSecondary }]}>Instagram, RED, Facebook, Threads, YouTube</Text>
 
-          {/* Error hint banner */}
           {parseHint && (
-            <View style={styles.hintBanner}>
-              <Ionicons name="alert-circle-outline" size={16} color="#FF3B30" />
+            <View style={[styles.hintBanner, styles.hintError]}>
+              <Ionicons name="warning" size={18} color="#FF3B30" />
               <Text style={[styles.hintText, { color: '#FF3B30' }]}>{parseHint}</Text>
             </View>
           )}
 
           <TextInput
             style={[styles.urlInput, { backgroundColor: t.bg, color: t.text }]}
-            placeholder="https://..."
-            placeholderTextColor={t.textSecondary}
             value={url}
             onChangeText={(v) => { setUrl(v); setResult(null); setParseHint(null); }}
             autoFocus={!url}
             autoCapitalize="none"
             autoCorrect={false}
             keyboardType="url"
+            placeholder="https://..."
+            placeholderTextColor={t.textTertiary}
           />
           <TouchableOpacity style={styles.parseBtn} onPress={handleParse}>
             <Ionicons name="sparkles" size={18} color="#FFF" />
@@ -407,13 +330,23 @@ export default function SaveScreen() {
     );
   }
 
-  // URL input screen
+  // Initial URL input screen
   return (
-    <KeyboardAvoidingView style={[styles.container, { backgroundColor: t.bgSecondary }]} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-      <ScrollView contentContainerStyle={styles.content}>
+    <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={[styles.container, { backgroundColor: t.bgSecondary }]}>
+      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
         <Text style={[styles.label, { color: t.text }]}>Paste a link</Text>
         <Text style={[styles.sublabel, { color: t.textSecondary }]}>Instagram, RED, Facebook, Threads, YouTube</Text>
-        <TextInput style={[styles.urlInput, { backgroundColor: t.bg, color: t.text }]} placeholder="https://..." placeholderTextColor={t.textSecondary} value={url} onChangeText={setUrl} autoFocus={!url} autoCapitalize="none" autoCorrect={false} keyboardType="url" />
+        <TextInput
+          style={[styles.urlInput, { backgroundColor: t.bg, color: t.text }]}
+          value={url}
+          onChangeText={(v) => { setUrl(v); setResult(null); setParseHint(null); }}
+          autoFocus={!url}
+          autoCapitalize="none"
+          autoCorrect={false}
+          keyboardType="url"
+          placeholder="https://..."
+          placeholderTextColor={t.textTertiary}
+        />
         <TouchableOpacity style={styles.parseBtn} onPress={handleParse}>
           <Ionicons name="sparkles" size={18} color="#FFF" />
           <Text style={styles.parseBtnText}>Parse & Edit</Text>
@@ -434,6 +367,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row', alignItems: 'flex-start',
     backgroundColor: '#EBF5FF', borderRadius: 10, padding: 12,
     marginBottom: 12, gap: 8,
+  },
+  hintError: {
+    backgroundColor: '#FFF0F0',
   },
   hintText: {
     flex: 1, fontSize: 13, color: '#007AFF', lineHeight: 18,
