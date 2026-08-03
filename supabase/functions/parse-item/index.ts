@@ -610,16 +610,20 @@ async function fetchAndScrapeHtml(url: string, platform?: Platform): Promise<str
 
     // 11. RED / 小紅書 extraction
     if (platform === 'red') {
-      // RED is JS-rendered, but sometimes embeds SSR data
-      // Look for __NEXT_DATA__ or similar JSON blobs
+      let redDataFound = false;
+
+      // RED is JS-rendered but embeds SSR data in various formats.
+      // Try multiple known patterns since RED changes these frequently.
+
+      // Pattern A: __NEXT_DATA__ (Next.js SSR)
       const nextData = html.match(/<script[^>]+id="__NEXT_DATA__"[^>]*type="application\/json"[^>]*>([\s\S]*?)<\/script>/i);
       if (nextData) {
         try {
           const parsed = JSON.parse(nextData[1]);
           const noteData = findNoteInNextData(parsed);
           if (noteData) {
-            if (noteData.title) parts.push(`Post title: ${noteData.title}`);
-            if (noteData.desc) parts.push(`Description: ${noteData.desc}`);
+            if (noteData.title) { parts.push(`Post title: ${noteData.title}`); redDataFound = true; }
+            if (noteData.desc) { parts.push(`Description: ${noteData.desc}`); redDataFound = true; }
             if (noteData.tagList) parts.push(`Tags: ${noteData.tagList}`);
             if (noteData.ipLocation) parts.push(`Location: ${noteData.ipLocation}`);
             if (noteData.noteId) parts.push(`Note ID: ${noteData.noteId}`);
@@ -627,7 +631,7 @@ async function fetchAndScrapeHtml(url: string, platform?: Platform): Promise<str
         } catch { /* ignore */ }
       }
 
-      // Try to extract from any embedded JSON or script data
+      // Pattern B: __INITIAL_STATE__ (older RED SSR)
       const scriptData = html.match(/<script[^>]*>window\.__INITIAL_STATE__\s*=\s*({[\s\S]*?})<\/script>/i);
       if (scriptData) {
         try {
@@ -635,12 +639,55 @@ async function fetchAndScrapeHtml(url: string, platform?: Platform): Promise<str
           const noteInfo = state?.note?.noteDetailMap || state?.noteDetail || state?.note;
           if (noteInfo) {
             const note = Object.values(noteInfo)[0] as any;
-            if (note?.note?.title) parts.push(`Post title: ${note.note.title}`);
-            if (note?.note?.desc) parts.push(`Description: ${note.note.desc}`);
+            if (note?.note?.title) { parts.push(`Post title: ${note.note.title}`); redDataFound = true; }
+            if (note?.note?.desc) { parts.push(`Description: ${note.note.desc}`); redDataFound = true; }
             if (note?.note?.tagList?.length) parts.push(`Tags: ${note.note.tagList.map((t: any) => t.name || t).join(', ')}`);
             if (note?.note?.ipLocation) parts.push(`Location: ${note.note.ipLocation}`);
           }
         } catch { /* ignore */ }
+      }
+
+      // Pattern C: __RENDER_DATA__ / window.__DATA__ (newer RED formats)
+      const renderData = html.match(/<script[^>]*>window\.__(?:RENDER_DATA__|DATA__)\s*=\s*({[\s\S]*?})<\/script>/i)
+        || html.match(/<script[^>]*id="__(?:RENDER_DATA__|DATA__)"[^>]*>([\s\S]*?)<\/script>/i);
+      if (renderData) {
+        try {
+          const parsed = JSON.parse(renderData[1]);
+          const noteData = findNoteInNextData(parsed);
+          if (noteData) {
+            if (noteData.title) { parts.push(`Post title: ${noteData.title}`); redDataFound = true; }
+            if (noteData.desc) { parts.push(`Description: ${noteData.desc}`); redDataFound = true; }
+            if (noteData.tagList) parts.push(`Tags: ${noteData.tagList}`);
+            if (noteData.ipLocation) parts.push(`Location: ${noteData.ipLocation}`);
+          }
+        } catch { /* ignore */ }
+      }
+
+      // Pattern D: RED meta tags (og:title often contains the post title)
+      if (!redDataFound) {
+        const ogTitle = html.match(/<meta[^>]+property="og:title"[^>]+content="([^"]*)"/i)?.[1];
+        const ogDesc = html.match(/<meta[^>]+property="og:description"[^>]+content="([^"]*)"/i)?.[1];
+        if (ogTitle && !ogTitle.includes('小紅書') && !ogTitle.includes('Xiaohongshu')) {
+          parts.push(`Post title: ${ogTitle}`);
+          redDataFound = true;
+        }
+        if (ogDesc && ogDesc.length > 10) {
+          parts.push(`Description: ${ogDesc}`);
+          redDataFound = true;
+        }
+      }
+
+      // Pattern E: Extract any visible text content from the static HTML as last resort
+      if (!redDataFound) {
+        // Look for text in common RED content containers
+        const contentMatches = html.match(/<div[^>]*class="[^"]*(?:note-text|desc|content|title)[^"]*"[^>]*>([\s\S]{0,2000}?)<\/div>/gi) || [];
+        const contentTexts = contentMatches
+          .map(m => m.replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim())
+          .filter(t => t.length > 15);
+        if (contentTexts.length) {
+          parts.push(`Page content: ${contentTexts.join(' | ').slice(0, 500)}`);
+          redDataFound = true;
+        }
       }
 
       // Extract from URL: xhslink.com short links redirect, xiaohongshu.com/discovery/item/XXX has the post ID

@@ -44,7 +44,7 @@ export default function HomeScreen() {
       const textContent = [sharedText, metaTitle].filter(Boolean).join('\n');
       const urlFromText = extractUrl(textContent) || textContent.match(/https?:\/\/[^\s]+/)?.[0] || '';
       const rawUrl = sharedWebUrl || urlFromText;
-      const finalUrl = rawUrl ? normalizeUrl(rawUrl) : '';
+      let finalUrl = rawUrl ? normalizeUrl(rawUrl) : '';
 
       console.log('[HomeScreen] share intent data:', {
         finalUrl,
@@ -56,8 +56,15 @@ export default function HomeScreen() {
       });
 
       if (!finalUrl && !sharedText) {
-        console.log('[HomeScreen] empty intent, waiting...');
+        console.log('[HomeScreen] completely empty intent — nothing to process');
         return;
+      }
+
+      // Facebook/Threads share sheets often provide text but no webUrl.
+      // Use a manual lookup URL so the edge function extracts from the text.
+      if (!finalUrl && sharedText) {
+        finalUrl = `https://spot.app/manual/${Date.now()}`;
+        console.log('[HomeScreen] No URL in share intent, using manual lookup with text');
       }
 
       shareProcessed.current = true;
