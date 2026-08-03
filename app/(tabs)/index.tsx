@@ -70,6 +70,14 @@ export default function HomeScreen() {
     }
   }, [hasShareIntent, shareIntent, isReady, router]);
 
+  // Reset processed flag when share intent clears so the NEXT share works
+  useEffect(() => {
+    if (!hasShareIntent) {
+      shareProcessed.current = false;
+      console.log('[HomeScreen] share intent cleared — reset processed flag');
+    }
+  }, [hasShareIntent]);
+
   const fetchSaves = useCallback(async () => {
     if (!user) return;
     const { data, error } = await supabase
