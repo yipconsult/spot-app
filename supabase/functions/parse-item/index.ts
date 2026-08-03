@@ -1118,11 +1118,24 @@ Deno.serve(async (req) => {
       // Google Maps: extract name + coords from URL, skip scrape (JS-rendered)
       if (platform === 'googlemaps') {
         // Resolve short links first
-        if (url.includes('goo.gl/maps') || url.includes('maps.app.goo.gl')) {
+        const isShortLink = url.includes('goo.gl/maps') || url.includes('maps.app.goo.gl');
+        if (isShortLink) {
           const resolved = await resolveGoogleMapsShortLink(url);
           if (resolved !== url && resolved.includes('google.com/maps')) {
             scrapeUrl = resolved;
             console.log(`[Parse] Google Maps short link resolved: ${resolved}`);
+          } else {
+            // Short link resolution failed — likely network restrictions from HK/CN
+            // Return early with a helpful hint instead of sending a useless URL to Gemini
+            console.log(`[Parse] Google Maps short link unresolved — returning hint`);
+            return new Response(JSON.stringify({
+              name_original: null, name_en: null,
+              address_original: null, address_en: null,
+              category: "other", district: null, price_hint: null,
+              tags: [], raw_text: url,
+              short_link_unresolved: true,
+              parse_hint: `Google Maps short links can't be expanded from our servers. Open this link in the Maps app first, then copy the full address link and paste it here.`,
+            }), { headers: { "Content-Type": "application/json" } });
           }
         }
 

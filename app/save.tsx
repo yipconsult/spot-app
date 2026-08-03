@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { View, TextInput, TouchableOpacity, Text, StyleSheet, Alert, KeyboardAvoidingView, Platform, ScrollView, AppState } from 'react-native';
+import { View, TextInput, TouchableOpacity, Text, StyleSheet, Alert, KeyboardAvoidingView, Platform, ScrollView } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { supabase } from '../src/lib/supabase';
@@ -34,12 +34,6 @@ export default function SaveScreen() {
 
   const lastFilledUrl = useRef<string | null>(null);
   const isSavingRef = useRef(false);
-  const parsingRef = useRef(false);
-
-  // Keep parsingRef in sync with state (for AppState guard)
-  useEffect(() => {
-    parsingRef.current = parsing;
-  }, [parsing]);
 
   // Auto-parse when navigated here with a prefill URL (from HomeScreen share handling)
   const handleParseWithText = useCallback(async (parseUrl: string, sharedText?: string) => {
@@ -79,19 +73,6 @@ export default function SaveScreen() {
       handleParseWithText(prefill, sharedText || undefined);
     }
   }, [params.prefillUrl, params.url, params.sharedText, handleParseWithText]);
-
-  // Reset state when app returns from background — BUT only if not mid-parse
-  useEffect(() => {
-    const sub = AppState.addEventListener('change', (state) => {
-      if (state === 'active' && !parsingRef.current) {
-        lastFilledUrl.current = null;
-        setResult(null);
-        setParsing(false);
-        console.log('[SaveScreen] App became active — reset for new share');
-      }
-    });
-    return () => sub.remove();
-  }, []);
 
   const handleParse = () => handleParseWithText(url);
 

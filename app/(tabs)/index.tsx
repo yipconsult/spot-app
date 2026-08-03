@@ -22,7 +22,7 @@ export default function HomeScreen() {
   const [clipUrl, setClipUrl] = useState<string | null>(null);
 
   // Handle shared content from iOS Share Extension
-  const { hasShareIntent, shareIntent, isReady } = useShareIntentContext();
+  const { hasShareIntent, shareIntent, resetShareIntent, isReady } = useShareIntentContext();
   const shareProcessed = useRef(false);
 
   useEffect(() => {
@@ -61,6 +61,7 @@ export default function HomeScreen() {
       }
 
       shareProcessed.current = true;
+      resetShareIntent(); // Clear share data from App Group container so hasShareIntent goes false
       console.log('[HomeScreen] navigating to save with:', { finalUrl, textLen: textContent.length });
 
       router.push({
