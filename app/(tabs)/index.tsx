@@ -8,7 +8,28 @@ import { useAuth } from '../../src/contexts/AuthContext';
 import { useTheme } from '../../src/contexts/ThemeContext';
 import { UserSave } from '../../src/types';
 import { ItemCard } from '../../src/components/ItemCard';
-import { checkClipboard } from '../../src/lib/clipboard';
+import { checkClipboard, extractUrl } from '../../src/lib/clipboard';
+
+/** Normalize Instagram URLs: strip tracking params, convert deep links to web URLs */
+function normalizeUrl(raw: string): string {
+  let url = raw.trim();
+  const deepLinkMatch = url.match(/^instagram:\/\/(?:media\?id=\d+|(reel|p|tv|stories)\/([A-Za-z0-9_-]+))/i);
+  if (deepLinkMatch) {
+    const type = deepLinkMatch[1] || 'p';
+    const code = deepLinkMatch[2];
+    if (code) url = `https://www.instagram.com/${type}/${code}/`;
+  }
+  try {
+    const u = new URL(url);
+    const trackingParams = ['igsh', 'igshid', 'utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term', 'fbclid', 'ref'];
+    let changed = false;
+    for (const p of trackingParams) {
+      if (u.searchParams.has(p)) { u.searchParams.delete(p); changed = true; }
+    }
+    if (changed) url = u.toString();
+  } catch { /* not a valid URL, return as-is */ }
+  return url;
+}
 
 export default function HomeScreen() {
   const { user } = useAuth();
@@ -41,11 +62,20 @@ export default function HomeScreen() {
       const sharedWebUrl = shareIntent.webUrl || '';
       const metaTitle = shareIntent.meta?.title || '';
 
+      // Use social-aware URL extraction (prefers Instagram, RED, etc. URLs)
       const textContent = [sharedText, metaTitle].filter(Boolean).join('\n');
-      const urlFromText = textContent.match(/https?:\/\/[^\s]+/)?.[0] || '';
-      const finalUrl = sharedWebUrl || urlFromText;
+      const urlFromText = extractUrl(textContent) || textContent.match(/https?:\/\/[^\s]+/)?.[0] || '';
+      const rawUrl = sharedWebUrl || urlFromText;
+      const finalUrl = rawUrl ? normalizeUrl(rawUrl) : '';
 
-      console.log('[HomeScreen] share intent data:', { finalUrl, sharedText: sharedText.slice(0, 100), sharedWebUrl });
+      console.log('[HomeScreen] share intent data:', {
+        finalUrl,
+        rawUrl,
+        sharedText: sharedText.slice(0, 100),
+        sharedWebUrl,
+        metaTitle,
+        type: shareIntent.type,
+      });
 
       if (!finalUrl && !sharedText) {
         console.log('[HomeScreen] empty intent, waiting...');

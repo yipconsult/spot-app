@@ -7,7 +7,42 @@ import { supabase } from '../src/lib/supabase';
 import { useAuth } from '../src/contexts/AuthContext';
 import { useTheme } from '../src/contexts/ThemeContext';
 import { ParseResult, Category, CATEGORY_LABELS } from '../src/types';
-import { checkClipboard } from '../src/lib/clipboard';
+import { checkClipboard, isSocialUrl, extractUrl } from '../src/lib/clipboard';
+import * as Clipboard from 'expo-clipboard';
+
+/** Normalize Instagram URLs: strip tracking params, convert deep links to web URLs */
+function normalizeUrl(raw: string): string {
+  let url = raw.trim();
+
+  // Convert instagram:// deep links to web URLs
+  // instagram://reel/CODE → https://www.instagram.com/reel/CODE/
+  // instagram://user?username=XXX → https://www.instagram.com/XXX/
+  const deepLinkMatch = url.match(/^instagram:\/\/(?:media\?id=\d+|(reel|p|tv|stories)\/([A-Za-z0-9_-]+))/i);
+  if (deepLinkMatch) {
+    const type = deepLinkMatch[1] || 'p';
+    const code = deepLinkMatch[2];
+    if (code) {
+      url = `https://www.instagram.com/${type}/${code}/`;
+    }
+  }
+
+  // Strip tracking/query params that can interfere with oEmbed/scraping
+  // Keep the path clean: remove ?igsh, ?igshid, ?utm_*, ?fbclid, etc.
+  try {
+    const u = new URL(url);
+    const trackingParams = ['igsh', 'igshid', 'utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term', 'fbclid', 'ref'];
+    let changed = false;
+    for (const p of trackingParams) {
+      if (u.searchParams.has(p)) {
+        u.searchParams.delete(p);
+        changed = true;
+      }
+    }
+    if (changed) url = u.toString();
+  } catch { /* not a valid URL, return as-is */ }
+
+  return url;
+}
 
 function detectPlatformFromUrl(url: string): string {
   const u = url.toLowerCase();
@@ -43,11 +78,57 @@ export default function SaveScreen() {
         const paramUrl = params.url || params.prefillUrl;
         const decodedUrl = paramUrl ? decodeURIComponent(paramUrl) : '';
 
-        const shareUrl = (isReady && hasShareIntent) ? (shareIntent.webUrl || '') : '';
-        const shareText = (isReady && hasShareIntent) ? (shareIntent.text || '') : '';
+        // Extract URL from share intent — check ALL possible sources
+        let shareUrl = '';
+        let shareTextForParse = '';
+        if (isReady && hasShareIntent) {
+          // Log full share intent for debugging
+          console.log('[SaveScreen] ShareIntent data:', {
+            webUrl: shareIntent.webUrl,
+            type: shareIntent.type,
+            textPreview: (shareIntent.text || '').slice(0, 200),
+            metaTitle: shareIntent.meta?.title || '',
+            hasFiles: !!(shareIntent.files?.length),
+          });
 
-        const useUrl = decodedUrl || shareUrl ||
-          (shareText ? shareText.match(/https?:\/\/[^\s]+/)?.[0] : '') || '';
+          // 1. webUrl (most reliable — direct URL attachment)
+          if (shareIntent.webUrl) {
+            shareUrl = shareIntent.webUrl;
+            console.log('[SaveScreen] Using shareIntent.webUrl:', shareUrl);
+          }
+
+          // 2. Extract URL from text — but use social-aware extraction
+          if (!shareUrl && shareIntent.text) {
+            const extracted = extractUrl(shareIntent.text);
+            if (extracted) {
+              shareUrl = extracted;
+              console.log('[SaveScreen] Extracted from shareIntent.text:', shareUrl);
+            }
+          }
+
+          // 3. Check meta.title for URLs (Instagram sometimes puts URL here)
+          if (!shareUrl && shareIntent.meta?.title) {
+            const titleUrl = shareIntent.meta.title.match(/https?:\/\/[^\s]+/)?.[0];
+            if (titleUrl) {
+              shareUrl = titleUrl;
+              console.log('[SaveScreen] Extracted from meta.title:', shareUrl);
+            }
+          }
+
+          // If still no URL, use text as-is for Gemini parsing context
+          if (!shareUrl && shareIntent.text) {
+            shareTextForParse = shareIntent.text;
+            console.log('[SaveScreen] No URL in share intent, using text for parse');
+          }
+        }
+
+        // Normalize the URL (strip tracking params, convert deep links)
+        const normalizedUrl = shareUrl ? normalizeUrl(shareUrl) : '';
+        const finalShareUrl = normalizedUrl || shareUrl; // prefer normalized
+
+        // Priority: param URL → share intent URL → text-based URL
+        const useUrl = decodedUrl || finalShareUrl ||
+          (shareTextForParse ? shareTextForParse.match(/https?:\/\/[^\s]+/)?.[0] : '') || '';
 
         if (useUrl && useUrl !== lastFilledUrl.current) {
           lastFilledUrl.current = useUrl;
@@ -55,18 +136,45 @@ export default function SaveScreen() {
           setResult(null);
           setUrl(useUrl);
           if (hasShareIntent && isReady) resetShareIntent();
-          console.log('[SaveScreen] Auto-parsing from share/deep-link:', useUrl);
-          handleParseWithText(useUrl, shareText || undefined);
+          console.log('[SaveScreen] Auto-parsing URL:', useUrl);
+          handleParseWithText(useUrl, shareIntent.text || shareTextForParse || undefined);
           return;
         }
 
-        // Clipboard fallback
+        if (useUrl === lastFilledUrl.current) {
+          console.log('[SaveScreen] URL already processed, skipping:', useUrl.slice(0, 80));
+          return;
+        }
+
+        // Clipboard fallback — wait 1.5s for share intent first, then fall back
         if (isReady) {
+          // Small delay: let ShareIntentProvider populate if it's going to
+          await new Promise(resolve => setTimeout(resolve, 1500));
+
+          // Re-check share intent (may have arrived late)
+          if (hasShareIntent && !lastFilledUrl.current) {
+            const lateUrl = shareIntent.webUrl || '';
+            const lateText = shareIntent.text || '';
+            if (lateUrl || lateText) {
+              const extracted = lateUrl || extractUrl(lateText) || '';
+              const normalized = extracted ? normalizeUrl(extracted) : '';
+              lastFilledUrl.current = normalized;
+              setResult(null);
+              setUrl(normalized);
+              resetShareIntent();
+              console.log('[SaveScreen] Late share intent, auto-parsing:', normalized);
+              handleParseWithText(normalized, lateText);
+              return;
+            }
+          }
+
           const clipUrl = await checkClipboard();
           if (clipUrl && clipUrl !== lastFilledUrl.current) {
             lastFilledUrl.current = clipUrl;
             setResult(null);
             setUrl(clipUrl);
+            // Clear clipboard to prevent stale reuse on next share
+            Clipboard.setStringAsync('').catch(() => {});
             console.log('[SaveScreen] Auto-parsing from clipboard:', clipUrl);
             handleParseWithText(clipUrl);
           }
@@ -94,14 +202,15 @@ export default function SaveScreen() {
 
   const handleParseWithText = async (parseUrl: string, sharedText?: string) => {
     setParsing(true);
+    const cleanUrl = normalizeUrl(parseUrl);
     try {
       const { data: fnData, error: fnError } = await supabase.functions.invoke('parse-item', {
-        body: { url: parseUrl.trim(), text: sharedText || undefined },
+        body: { url: cleanUrl, text: sharedText || undefined },
       });
       if (fnError) throw fnError;
-      const data = fnData as ParseResult;
-      setResult(data);
-      setParseHint(data.parse_hint || null);
+      const data = fnData as Record<string, unknown>;
+      setResult(data as unknown as ParseResult);
+      setParseHint((data.parse_hint as string) || null);
     } catch (err: any) {
       setParseHint('Something went wrong. Check your connection and try again, or fill in details manually.');
       setResult({
@@ -143,18 +252,20 @@ export default function SaveScreen() {
   const handleSave = async () => {
     if (!user || !result) return;
 
+    const cleanUrl = normalizeUrl(url.trim());
+
     const { data: existing } = await supabase
-      .from('saved_items').select('id').eq('source_url', url.trim()).single();
+      .from('saved_items').select('id').eq('source_url', cleanUrl).single();
     let itemId = existing?.id;
 
     if (!itemId) {
       // Detect platform from URL for the card display
-      const platform = detectPlatformFromUrl(url.trim());
-      const thumbnailUrl = result.thumbnail_url || null;
+      const platform = detectPlatformFromUrl(cleanUrl);
+      const thumbnailUrl = (result as any).thumbnail_url || null;
 
       const { data: inserted, error: itemErr } = await supabase
         .from('saved_items').insert({
-          source_url: url.trim(),
+          source_url: cleanUrl,
           source_platform: platform as any,
           name_original: result.name_original,
           name_en: result.name_en,
@@ -191,8 +302,10 @@ export default function SaveScreen() {
     );
   }
 
-  // Show edit form if we have a result (from parse or after failed parse)
-  if (result) {
+  // Only show edit form if we have useful data — otherwise show URL input with error
+  const hasUsefulData = result && (result.name_en || result.name_original || result.address_en || result.address_original);
+
+  if (result && hasUsefulData) {
     return (
       <KeyboardAvoidingView style={[styles.container, { backgroundColor: t.bgSecondary }]} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <ScrollView contentContainerStyle={styles.content}>
@@ -252,6 +365,42 @@ export default function SaveScreen() {
 
           <TouchableOpacity style={styles.reparseBtn} onPress={handleParse}>
             <Text style={styles.reparseBtnText}>Re-parse URL</Text>
+          </TouchableOpacity>
+        </ScrollView>
+      </KeyboardAvoidingView>
+    );
+  }
+
+  // Parse failed with no useful data — show URL input with error hint
+  if (result && !hasUsefulData) {
+    return (
+      <KeyboardAvoidingView style={[styles.container, { backgroundColor: t.bgSecondary }]} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+        <ScrollView contentContainerStyle={styles.content}>
+          <Text style={[styles.label, { color: t.text }]}>Paste a link</Text>
+          <Text style={[styles.sublabel, { color: t.textSecondary }]}>Instagram, RED, Facebook, Threads, YouTube</Text>
+
+          {/* Error hint banner */}
+          {parseHint && (
+            <View style={styles.hintBanner}>
+              <Ionicons name="alert-circle-outline" size={16} color="#FF3B30" />
+              <Text style={[styles.hintText, { color: '#FF3B30' }]}>{parseHint}</Text>
+            </View>
+          )}
+
+          <TextInput
+            style={[styles.urlInput, { backgroundColor: t.bg, color: t.text }]}
+            placeholder="https://..."
+            placeholderTextColor={t.textSecondary}
+            value={url}
+            onChangeText={(v) => { setUrl(v); setResult(null); setParseHint(null); }}
+            autoFocus={!url}
+            autoCapitalize="none"
+            autoCorrect={false}
+            keyboardType="url"
+          />
+          <TouchableOpacity style={styles.parseBtn} onPress={handleParse}>
+            <Ionicons name="sparkles" size={18} color="#FFF" />
+            <Text style={styles.parseBtnText}>Parse & Edit</Text>
           </TouchableOpacity>
         </ScrollView>
       </KeyboardAvoidingView>

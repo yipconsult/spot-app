@@ -25,6 +25,7 @@ export default function ItemDetailScreen() {
   const [editDistrict, setEditDistrict] = useState('');
   const [editPrice, setEditPrice] = useState('');
   const [editTags, setEditTags] = useState('');
+  const [lookingUp, setLookingUp] = useState(false);
 
   useEffect(() => {
     if (!id) return;
@@ -129,6 +130,42 @@ export default function ItemDetailScreen() {
     }
   };
 
+  const handleLookup = async () => {
+    if (!item || !id) return;
+    const searchName = item.name_en || item.name_original;
+    if (!searchName) { Alert.alert('No name', 'Add a name first, then use Look Up to find the address.'); return; }
+    setLookingUp(true);
+    try {
+      const { data: fnData, error: fnError } = await supabase.functions.invoke('parse-item', {
+        body: { url: `https://spot.app/lookup/${Date.now()}`, text: `${searchName} Hong Kong` },
+      });
+      if (fnError) throw fnError;
+      const enriched = fnData as Record<string, unknown>;
+
+      const updates: Record<string, unknown> = {};
+      if (!item.address_en && enriched.address_en) updates.address_en = enriched.address_en;
+      if (!item.address_original && enriched.address_original) updates.address_original = enriched.address_original;
+      if (!item.district && enriched.district) updates.district = enriched.district;
+      if ((item.category === 'other' || !item.category) && enriched.category && enriched.category !== 'other') updates.category = enriched.category;
+      if (!item.price_hint && enriched.price_hint) updates.price_hint = enriched.price_hint;
+      if ((!item.tags || item.tags.length === 0) && (enriched.tags as string[])?.length > 0) updates.tags = enriched.tags;
+
+      if (Object.keys(updates).length > 0) {
+        const { error: updateErr } = await supabase.from('saved_items').update(updates).eq('id', id);
+        if (updateErr) throw updateErr;
+        setItem({ ...item, ...updates } as SavedItem);
+        Alert.alert('Updated', 'Missing details filled in.');
+      } else {
+        Alert.alert('No updates', 'All available details are already filled.');
+      }
+    } catch (err: any) {
+      Alert.alert('Look Up failed', err.message || 'Try again or fill in details manually.');
+    } finally {
+      setLookingUp(false);
+    }
+  };
+
+  const hasMissingInfo = item && (!item.address_en || !item.district || !item.price_hint || item.category === 'other' || !item.tags?.length);
   const handleDelete = () => {
     Alert.alert('Delete Spot', 'Remove this spot from your saves?', [
       { text: 'Cancel', style: 'cancel' },
@@ -243,6 +280,14 @@ export default function ItemDetailScreen() {
             <Text style={styles.sourceText} numberOfLines={1}>{item.source_url}</Text>
           </View>
 
+          {/* Look Up — fill missing info */}
+          {hasMissingInfo && (
+            <TouchableOpacity style={styles.lookupBtn} onPress={handleLookup} disabled={lookingUp}>
+              <Ionicons name="search" size={18} color="#FFF" />
+              <Text style={styles.lookupText}>{lookingUp ? 'Looking up...' : 'Look Up Missing Details'}</Text>
+            </TouchableOpacity>
+          )}
+
           {/* Actions */}
           <View style={styles.actions}>
             <TouchableOpacity style={styles.actionBtn} onPress={handleOpenMaps}>
@@ -321,4 +366,6 @@ const styles = StyleSheet.create({
   chipTextActive: { color: '#FFF' },
   saveEditBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: '#34C759', paddingVertical: 14, borderRadius: 12, marginTop: 20, gap: 8 },
   saveEditText: { fontSize: 15, fontWeight: '700', color: '#FFF' },
+  lookupBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: '#FF6B35', paddingVertical: 12, borderRadius: 12, marginTop: 16, gap: 8 },
+  lookupText: { fontSize: 14, fontWeight: '700', color: '#FFF' },
 });

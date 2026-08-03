@@ -33,8 +33,8 @@ function detectPlatform(url: string): Platform {
   if (u.includes('xhslink.com') || u.includes('xiaohongshu.com')) return 'red';
   if (u.includes('pin.it') || u.includes('pinterest.com')) return 'pinterest';
   if (u.includes('youtube.com') || u.includes('youtu.be')) return 'youtube';
-  if (u.includes('openrice.com')) return 'openrice';  // catches s.openrice.com too
-  if (u.includes('google.com/maps') || u.includes('goo.gl/maps') || u.includes('maps.app.goo.gl')) return 'googlemaps';
+  if (u.includes('openrice.com') || u.startsWith('openrice://')) return 'openrice';
+  if (u.includes('google.com/maps') || u.includes('maps.google.com') || u.includes('goo.gl/maps') || u.includes('maps.app.goo.gl')) return 'googlemaps';
   if (u.includes('dianping.com') || u.includes('dpurl.cn')) return 'dianping';
   return 'other';
 }
@@ -127,6 +127,14 @@ async function fetchOembed(url: string, platform: Platform): Promise<OembedResul
         if (FB_APP_TOKEN) {
           oembedUrls.push(`https://graph.facebook.com/v22.0/oembed_post?url=${encodeURIComponent(url)}&access_token=${FB_APP_TOKEN}`);
         }
+        // Fallback: try unauthenticated public oEmbed (works for public posts/reels)
+        oembedUrls.push(`https://www.facebook.com/plugins/post/oembed.json/?url=${encodeURIComponent(url)}`);
+        // Also try the oEmbed video endpoint for reels/videos
+        oembedUrls.push(`https://www.facebook.com/plugins/video/oembed.json/?url=${encodeURIComponent(url)}`);
+        break;
+      case 'youtube':
+        // YouTube oEmbed is free and returns title, author_name, thumbnail_url
+        oembedUrls.push(`https://www.youtube.com/oembed?url=${encodeURIComponent(url)}&format=json`);
         break;
     }
 
@@ -198,6 +206,14 @@ function extractFromGoogleMapsUrl(url: string): GmapsExtracted {
       const searchMatch = decoded.match(/\/search\/([^/@]+?)(?:\/@|$|\/data=)/);
       if (searchMatch) {
         result.placeName = searchMatch[1].replace(/\+/g, ' ').trim();
+      }
+    }
+
+    // Try to extract from ?q= query param (Chrome mobile format)
+    if (!result.placeName) {
+      const qMatch = decoded.match(/[?&]q=([^&]+)/);
+      if (qMatch) {
+        result.placeName = decodeURIComponent(qMatch[1]).replace(/\+/g, ' ').trim();
       }
     }
   } catch { /* URL parsing failed */ }
@@ -479,7 +495,73 @@ async function fetchAndScrapeHtml(url: string, platform?: Platform): Promise<str
       } catch { /* ignore */ }
     }
 
-    // 8. OpenRice-specific extraction
+    // 8. Facebook-specific extraction
+    if (platform === 'facebook') {
+      // Facebook pages are JS-heavy but embed useful metadata in OG tags and title
+      // Extract caption from og:description (FB reels/videos put captions here)
+      const ogDesc = html.match(/<meta[^>]+property="og:description"[^>]+content="([^"]*)"/i)?.[1];
+      if (ogDesc && ogDesc.length > 10) {
+        parts.push(`Post caption: ${ogDesc}`);
+      }
+
+      // Extract from og:title (usually the page/channel name, sometimes contains post text)
+      const ogTitle = html.match(/<meta[^>]+property="og:title"[^>]+content="([^"]*)"/i)?.[1];
+      if (ogTitle && ogTitle !== ogDesc && !parts.some(p => p.includes(ogTitle!))) {
+        parts.push(`Post title: ${ogTitle}`);
+      }
+
+      // Extract FB post ID from URL for context
+      try {
+        const pathname = new URL(url).pathname;
+        // facebook.com/share/r/SOMETHING → reel redirect
+        // facebook.com/reel/ID → direct reel
+        // facebook.com/username/posts/ID → post
+        // fb.watch/ID → video
+        if (url.includes('reel') || url.includes('/share/r/') || url.includes('fb.watch')) {
+          parts.push('Note: This is a Facebook Reel or video. Look for place mentions in the caption and title.');
+        }
+        if (pathname.includes('/posts/') || pathname.includes('/videos/')) {
+          parts.push('Note: This is a Facebook post or video. Check the description for place mentions.');
+        }
+        // Try to extract page/group name from URL
+        const pageMatch = pathname.match(/^\/([^/]+)\/(?:posts|videos|reels)\//);
+        if (pageMatch) {
+          parts.push(`Facebook page: @${pageMatch[1]}`);
+        }
+      } catch { /* ignore */ }
+
+      parts.push('Platform: Facebook post — this is a social media post about a place in Hong Kong');
+    }
+
+    // 9. YouTube-specific extraction
+    if (platform === 'youtube') {
+      // YouTube is JS-rendered but reliably provides OG tags
+      // og:title is the video title, og:description is available for many videos
+      const ytTitle = html.match(/<meta[^>]+property="og:title"[^>]+content="([^"]*)"/i)?.[1];
+      const ytDesc = html.match(/<meta[^>]+property="og:description"[^>]+content="([^"]*)"/i)?.[1];
+
+      if (ytTitle) {
+        // Strip the " - YouTube" suffix from title
+        const cleanTitle = ytTitle.replace(/\s*-\s*YouTube\s*$/i, '').trim();
+        parts.push(`Video title: ${cleanTitle}`);
+      }
+      if (ytDesc && ytDesc.length > 10) {
+        parts.push(`Video description: ${ytDesc.slice(0, 500)}`);
+      }
+
+      // YouTube channel name from og:site_name or author meta
+      const ogSiteName = html.match(/<meta[^>]+property="og:site_name"[^>]+content="([^"]*)"/i)?.[1];
+      if (ogSiteName) parts.push(`Channel: ${ogSiteName}`);
+
+      // Detect video type
+      if (url.includes('/shorts/')) {
+        parts.push('Note: This is a YouTube Short — a short video likely showcasing a Hong Kong restaurant, cafe, or attraction');
+      } else {
+        parts.push('Note: This is a YouTube video — likely a food/place review or recommendation in Hong Kong');
+      }
+    }
+
+    // 10. OpenRice-specific extraction
     if (platform === 'openrice') {
       const pathname = new URL(url).pathname;
 
@@ -526,7 +608,7 @@ async function fetchAndScrapeHtml(url: string, platform?: Platform): Promise<str
       parts.push('Platform: OpenRice Hong Kong restaurant page');
     }
 
-    // 9. RED / 小紅書 extraction
+    // 11. RED / 小紅書 extraction
     if (platform === 'red') {
       // RED is JS-rendered, but sometimes embeds SSR data
       // Look for __NEXT_DATA__ or similar JSON blobs
@@ -571,12 +653,12 @@ async function fetchAndScrapeHtml(url: string, platform?: Platform): Promise<str
       parts.push('Platform: Xiaohongshu (RED) post — this is a social media post about a place in Hong Kong');
     }
 
-    // 10. Google Maps — just note the platform, main extraction is from URL
+    // 12. Google Maps — just note the platform, main extraction is from URL
     if (platform === 'googlemaps') {
       parts.push('Platform: Google Maps shared location');
     }
 
-    // 11. Dianping / 大眾點評 extraction
+    // 13. Dianping / 大眾點評 extraction
     if (platform === 'dianping') {
       // Dianping is JS-rendered, but sometimes embeds SSR data
       // Check for __NEXT_DATA__, __NUXT__ or embedded JSON state
@@ -811,29 +893,53 @@ Return ONLY a JSON object:
   }
 }
 
-// ── Contextual place search for Instagram (when no name extracted) ─
+// ── Contextual place search for social platforms (when no name extracted) ─
 
 async function contextualPlaceSearch(
   url: string,
   platform: Platform,
   promptText: string,
 ): Promise<Record<string, unknown>> {
-  const meta = extractInstagramMeta(url);
   const contextParts: string[] = [];
-  if (meta.username) contextParts.push(`Instagram account: @${meta.username}`);
-  if (meta.postType) contextParts.push(`Post type: ${meta.postType}`);
+
+  // Platform-specific metadata
+  if (platform === 'instagram' || platform === 'threads') {
+    const meta = extractInstagramMeta(url);
+    if (meta.username) contextParts.push(`Account: @${meta.username}`);
+    if (meta.postType) contextParts.push(`Post type: ${meta.postType}`);
+  }
+
+  if (platform === 'facebook') {
+    contextParts.push('Platform: Facebook (Meta)');
+    try {
+      const pageMatch = new URL(url).pathname.match(/^\/([^/]+)\/(?:posts|videos|reels)\//);
+      if (pageMatch) contextParts.push(`Facebook page: @${pageMatch[1]}`);
+    } catch { /* ignore */ }
+  }
+
+  if (platform === 'youtube') {
+    contextParts.push('Platform: YouTube');
+    // Try to extract channel hints from the prompt text
+    const channelMatch = promptText.match(/Channel:\s*(.+)/i);
+    if (channelMatch) contextParts.push(`Channel: ${channelMatch[1]}`);
+  }
+
   if (promptText) contextParts.push(`Available content: ${promptText.substring(0, 1000)}`);
 
-  const searchPrompt = `You are a Hong Kong location expert. An Instagram post was shared but we couldn't identify the place. Look at the context clues and identify the MAIN place this post is about.
+  const platformLabel = platform === 'facebook' ? 'Facebook' : platform === 'youtube' ? 'YouTube' : platform === 'red' ? 'Xiaohongshu (RED)' : platform === 'threads' ? 'Threads' : 'Instagram';
+
+  const searchPrompt = `You are a Hong Kong location expert. A ${platformLabel} post was shared but we couldn't identify the place. Look at the context clues and identify the MAIN place this post is about.
 
 Context:
 ${contextParts.join('\n')}
 
 Think step by step:
-1. Does the Instagram username itself look like a business/restaurant name? (e.g., @bakehousehk → Bakehouse)
-2. Are there hashtags that identify a place?
-3. Does the caption mention a specific restaurant, cafe, or location?
-4. What area/district of Hong Kong does this seem to be in?
+1. Does the account/channel name itself look like a business/restaurant name? (e.g., @bakehousehk → Bakehouse)
+2. Does the video/post title contain a restaurant, cafe, shop name or area?
+3. Are there hashtags or keywords that identify a place?
+4. Does the caption/description mention a specific restaurant, cafe, or location?
+5. What area/district of Hong Kong does this seem to be in?
+6. For food/restaurant content: the video title often follows patterns like "Best [cuisine] in [area]" or "[Place name] - [Area]"
 
 Return ONLY a JSON object with your best assessment:
 {
@@ -1036,6 +1142,17 @@ Deno.serve(async (req) => {
         }
       }
 
+      // OpenRice deep links: convert openrice:// to https:// for scraping
+      if (platform === 'openrice' && url.startsWith('openrice://')) {
+        // Convert openrice://r/{id} or openrice://s/{slug} to HTTP URL
+        const openriceHttp = url
+          .replace('openrice://', 'https://www.openrice.com/')
+          .replace(/^https:\/\/www\.openrice\.com\/r\//, 'https://www.openrice.com/hongkong/restaurant/')
+          .replace(/^https:\/\/www\.openrice\.com\/s\//, 'https://www.openrice.com/hongkong/r/');
+        scrapeUrl = openriceHttp;
+        console.log(`[Parse] Converted OpenRice deep link to: ${scrapeUrl}`);
+      }
+
       // OpenRice short links: try to resolve, otherwise return empty (no guessing)
       if (platform === 'openrice' && url.includes('s.openrice.com')) {
         const resolved = await resolveOpenRiceShortLink(url);
@@ -1106,6 +1223,14 @@ Deno.serve(async (req) => {
       if (platform === 'red') {
         fallbackParts.push('This is a Xiaohongshu (RED/小紅書) post about a place in Hong Kong. The post likely contains a restaurant, cafe, shop, or attraction recommendation with location details. Extract whatever place information you can identify.');
       }
+      // Facebook — may have minimal scrape data depending on post privacy
+      if (platform === 'facebook') {
+        fallbackParts.push('This is a Facebook post (possibly a Reel or video) about a place in Hong Kong. Facebook posts often contain restaurant/cafe names in the caption or video overlay text. Look for HK place names in the available content.');
+      }
+      // YouTube — oEmbed gives video title; description may have place details
+      if (platform === 'youtube') {
+        fallbackParts.push('This is a YouTube video (possibly a Short) about a place in Hong Kong. Video titles often contain the restaurant/cafe name and sometimes the area. Descriptions may list the address. Extract the main place being reviewed or featured.');
+      }
       if (platform === 'dianping') {
         fallbackParts.push('This is a Dianping (大眾點評) link to a restaurant in Hong Kong or mainland China. The page likely contains shop name, address, cuisine type, average price, and ratings. Extract whatever details are available.');
       }
@@ -1133,7 +1258,7 @@ Deno.serve(async (req) => {
     // ── 4. Enrichment — three tiers ──────────────────────────
     const searchName = (parsed.name_en || parsed.name_original) as string | undefined;
     const hasAddress = !!(parsed.address_en || parsed.address_original);
-    const isSocial = platform === 'instagram' || platform === 'threads' || platform === 'red' || platform === 'facebook' || platform === 'openrice' || platform === 'dianping';
+    const isSocial = platform === 'instagram' || platform === 'threads' || platform === 'red' || platform === 'facebook' || platform === 'openrice' || platform === 'dianping' || platform === 'youtube';
 
     // Tier 1: Name extracted but no address — standard enrichment
     if (searchName && !hasAddress) {
@@ -1245,11 +1370,8 @@ Deno.serve(async (req) => {
       console.log(`[Enrich] Tier 3 — skipping, address already present for: ${searchName}`);
     }
 
-    // ── 5. Determine name/address presence (used by caching + hint) ──
+    // ── 5. Cache result (fire-and-forget) ────────────────────
     const hasName = !!(parsed.name_en || parsed.name_original);
-    const hasAddr = !!(parsed.address_en || parsed.address_original);
-
-    // ── 6. Cache result (fire-and-forget) ────────────────────
     if (hasName) {
       // Upsert into saved_items so subsequent parses of this URL hit the cache
       // Only insert if not already cached (preserves curated entries)
@@ -1272,7 +1394,8 @@ Deno.serve(async (req) => {
         .catch((err: any) => console.log(`[Cache] Upsert skipped (already exists): ${err?.message}`));
     }
 
-    // ── 7. Build error hint ──────────────────────────────────
+    // ── 6. Build error hint ──────────────────────────────────
+    const hasAddr = !!(parsed.address_en || parsed.address_original);
     let parseHint: string | null = null;
 
     if (!hasName && !hasAddr) {
@@ -1290,7 +1413,7 @@ Deno.serve(async (req) => {
       parseHint = `Found an address but not the place name. Type the name manually or try Look Up.`;
     }
 
-    // ── 8. Return result ────────────────────────────────────
+    // ── 7. Return result ────────────────────────────────────
     return new Response(JSON.stringify({
       name_original: parsed.name_original || null,
       name_en: parsed.name_en || null,

@@ -10,11 +10,22 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.spot.app.hk",
+      "entitlements": {
+        "com.apple.security.application-groups": [
+          "group.com.spot.app.shared"
+        ]
+      },
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "Spot uses your location to show you spots nearby on the map.",
         "NSCalendarsUsageDescription": "Spot can add planned visits to your calendar.",
         "NSUserTrackingUsageDescription": "This identifier will be used to deliver personalized recommendations.",
-        "ITSAppUsesNonExemptEncryption": false
+        "ITSAppUsesNonExemptEncryption": false,
+        "CFBundleURLTypes": [
+          {
+            "CFBundleURLSchemes": ["spot"]
+          }
+        ],
+        "LSApplicationQueriesSchemes": ["spot"]
       }
     },
     "android": {

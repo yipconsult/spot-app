@@ -152,10 +152,6 @@ export interface ParseResult {
   price_hint: string | null;
   tags: string[];
   raw_text: string;
-  thumbnail_url?: string | null;
-  parse_hint?: string | null;
-  cached?: boolean;
-  parse_failed?: boolean;
 }
 
 // ── Display helpers ──────────────────────────────────────────
