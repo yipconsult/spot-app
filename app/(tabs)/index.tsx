@@ -24,6 +24,7 @@ export default function HomeScreen() {
   // Handle shared content from iOS Share Extension
   const { hasShareIntent, shareIntent, resetShareIntent, isReady } = useShareIntentContext();
   const shareProcessed = useRef(false);
+  const lastShareTime = useRef(0);
 
   useEffect(() => {
     console.log('[HomeScreen] share intent state:', {
@@ -36,59 +37,65 @@ export default function HomeScreen() {
   }, [hasShareIntent, shareIntent, isReady]);
 
   useEffect(() => {
-    if (hasShareIntent && isReady && !shareProcessed.current) {
-      const sharedText = shareIntent.text || '';
-      const sharedWebUrl = shareIntent.webUrl || '';
-      const metaTitle = shareIntent.meta?.title || '';
-
-      const textContent = [sharedText, metaTitle].filter(Boolean).join('\n');
-      const urlFromText = extractUrl(textContent) || textContent.match(/https?:\/\/[^\s]+/)?.[0] || '';
-      const rawUrl = sharedWebUrl || urlFromText;
-      const finalUrl = rawUrl ? normalizeUrl(rawUrl) : '';
-
-      console.log('[HomeScreen] share intent data:', {
-        finalUrl,
-        rawUrl,
-        sharedText: sharedText.slice(0, 100),
-        sharedWebUrl,
-        metaTitle,
-        type: shareIntent.type,
-      });
-
-      // ── P2-A: Facebook/Threads share with no URL ─────────────────
-      // These platforms don't include the post URL in the share payload.
-      // Detect this and show a helpful message instead of navigating to save with empty data.
-      const lowerText = textContent.toLowerCase();
-      const isFacebookShare = lowerText.includes('facebook') || sharedWebUrl?.includes('facebook.com');
-      const isThreadsShare = lowerText.includes('threads') || sharedWebUrl?.includes('threads.net');
-
-      if (!finalUrl && (isFacebookShare || isThreadsShare)) {
-        shareProcessed.current = true;
-        resetShareIntent();
-        Alert.alert(
-          "Can't read this link directly",
-          "Facebook and Threads don't include the post link when sharing from the app.\n\nCopy the link from the post menu, then return to Spot and paste it.",
-          [{ text: 'OK' }]
-        );
-        return;
-      }
-      // ─────────────────────────────────────────────────────────────
-
-      if (!finalUrl && !sharedText) {
-        console.log('[HomeScreen] completely empty intent — nothing to process');
-        return;
-      }
-
-      shareProcessed.current = true;
-      resetShareIntent(); // Clear share data from App Group container so hasShareIntent goes false
-      console.log('[HomeScreen] navigating to save with:', { finalUrl, textLen: textContent.length });
-
-      router.push({
-        pathname: '/save',
-        params: { prefillUrl: finalUrl, sharedText: textContent.slice(0, 5000) },
-      });
+    // Guard: prevent re-processing the same share within 3 seconds
+    const now = Date.now();
+    if (!hasShareIntent || !isReady) return;
+    if (shareProcessed.current && now - lastShareTime.current < 3000) return;
+    if (shareProcessed.current) {
+      // Stale guard — reset if it's been > 3s since last share
+      shareProcessed.current = false;
     }
-  }, [hasShareIntent, shareIntent, isReady, router]);
+
+    const sharedText = shareIntent.text || '';
+    const sharedWebUrl = shareIntent.webUrl || '';
+    const metaTitle = shareIntent.meta?.title || '';
+
+    const textContent = [sharedText, metaTitle].filter(Boolean).join('\n');
+    const urlFromText = extractUrl(textContent) || textContent.match(/https?:\/\/[^\s]+/)?.[0] || '';
+    const rawUrl = sharedWebUrl || urlFromText;
+    const finalUrl = rawUrl ? normalizeUrl(rawUrl) : '';
+
+    console.log('[HomeScreen] share intent data:', {
+      finalUrl,
+      rawUrl,
+      sharedText: sharedText.slice(0, 100),
+      sharedWebUrl,
+      metaTitle,
+      type: shareIntent.type,
+    });
+
+    // ── P2-A: Facebook/Threads share with no URL ─────────────────
+    const lowerText = textContent.toLowerCase();
+    const isFacebookShare = lowerText.includes('facebook') || sharedWebUrl?.includes('facebook.com');
+    const isThreadsShare = lowerText.includes('threads') || sharedWebUrl?.includes('threads.net');
+
+    if (!finalUrl && (isFacebookShare || isThreadsShare)) {
+      shareProcessed.current = true;
+      lastShareTime.current = now;
+      resetShareIntent();
+      Alert.alert(
+        "Can't read this link directly",
+        "Facebook and Threads don't include the post link when sharing from the app.\n\nCopy the link from the post menu, then return to Spot and paste it.",
+        [{ text: 'OK' }]
+      );
+      return;
+    }
+
+    if (!finalUrl && !sharedText) {
+      console.log('[HomeScreen] completely empty intent — nothing to process');
+      return;
+    }
+
+    shareProcessed.current = true;
+    lastShareTime.current = now;
+    resetShareIntent();
+    console.log('[HomeScreen] navigating to save with:', { finalUrl, textLen: textContent.length });
+
+    router.push({
+      pathname: '/save',
+      params: { prefillUrl: finalUrl, sharedText: textContent.slice(0, 5000) },
+    });
+  }, [hasShareIntent, isReady, router]); // Removed shareIntent from deps — prevents re-run loop
 
   // Reset processed flag when share intent clears so the NEXT share works
   useEffect(() => {
