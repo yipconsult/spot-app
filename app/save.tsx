@@ -165,19 +165,22 @@ export default function SaveScreen() {
     );
   }
 
-  const hasUsefulData = result && (result.name_en || result.name_original || result.address_en || result.address_original);
+  if (result) {
+    const hasUsefulData = !!(result.name_en || result.name_original || result.address_en || result.address_original);
+    const isErrorHint = parseHint && !hasUsefulData;
 
-  if (result && hasUsefulData) {
     return (
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={[styles.container, { backgroundColor: t.bgSecondary }]}>
         <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
           <Text style={[styles.label, { color: t.text }]}>Edit before saving</Text>
-          <Text style={[styles.sublabel, { color: t.textSecondary }]}>AI filled what it could. Fix anything that's wrong.</Text>
+          <Text style={[styles.sublabel, { color: t.textSecondary }]}>
+            {hasUsefulData ? 'AI filled what it could. Fix anything that\'s wrong.' : 'AI couldn\'t extract details. Fill in what you know, or re-parse.'}
+          </Text>
 
           {parseHint && (
-            <View style={styles.hintBanner}>
-              <Ionicons name="information-circle" size={18} color="#007AFF" />
-              <Text style={styles.hintText}>{parseHint}</Text>
+            <View style={[styles.hintBanner, isErrorHint && styles.hintError]}>
+              <Ionicons name={isErrorHint ? 'alert-circle' : 'information-circle'} size={18} color={isErrorHint ? '#FF3B30' : '#34C759'} />
+              <Text style={[styles.hintText, isErrorHint && { color: '#FF3B30' }]}>{parseHint}</Text>
             </View>
           )}
 
@@ -276,42 +279,7 @@ export default function SaveScreen() {
     );
   }
 
-  // Parse failed with no useful data — show URL input with error hint
-  if (result && !hasUsefulData) {
-    return (
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={[styles.container, { backgroundColor: t.bgSecondary }]}>
-        <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-          <Text style={[styles.label, { color: t.text }]}>Paste a link</Text>
-          <Text style={[styles.sublabel, { color: t.textSecondary }]}>Instagram, RED, Facebook, Threads, YouTube</Text>
-
-          {parseHint && (
-            <View style={[styles.hintBanner, styles.hintError]}>
-              <Ionicons name="warning" size={18} color="#FF3B30" />
-              <Text style={[styles.hintText, { color: '#FF3B30' }]}>{parseHint}</Text>
-            </View>
-          )}
-
-          <TextInput
-            style={[styles.urlInput, { backgroundColor: t.bg, color: t.text }]}
-            value={url}
-            onChangeText={(v) => { setUrl(v); setResult(null); setParseHint(null); }}
-            autoFocus={!url}
-            autoCapitalize="none"
-            autoCorrect={false}
-            keyboardType="url"
-            placeholder="https://..."
-            placeholderTextColor={t.textTertiary}
-          />
-          <TouchableOpacity style={styles.parseBtn} onPress={handleParse}>
-            <Ionicons name="sparkles" size={18} color="#FFF" />
-            <Text style={styles.parseBtnText}>Parse & Edit</Text>
-          </TouchableOpacity>
-        </ScrollView>
-      </KeyboardAvoidingView>
-    );
-  }
-
-  // Initial URL input screen
+  // Initial URL input screen (no result yet)
   return (
     <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={[styles.container, { backgroundColor: t.bgSecondary }]}>
       <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
