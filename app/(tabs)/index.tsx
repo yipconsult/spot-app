@@ -25,6 +25,7 @@ export default function HomeScreen() {
   const { hasShareIntent, shareIntent, resetShareIntent, isReady } = useShareIntentContext();
   const shareProcessed = useRef(false);
   const lastShareTime = useRef(0);
+  const lastProcessedUrl = useRef<string | null>(null);
 
   useEffect(() => {
     console.log('[HomeScreen] share intent state:', {
@@ -64,6 +65,13 @@ export default function HomeScreen() {
       type: shareIntent.type,
     });
 
+    // ── URL dedup guard: skip if we already processed this exact URL ─
+    if (finalUrl && finalUrl === lastProcessedUrl.current) {
+      console.log('[HomeScreen] duplicate URL, skipping:', finalUrl.slice(0, 80));
+      resetShareIntent(); // Force-clear native state so it stops re-delivering
+      return;
+    }
+
     // ── P2-A: Facebook/Threads share with no URL ─────────────────
     const lowerText = textContent.toLowerCase();
     const isFacebookShare = lowerText.includes('facebook') || sharedWebUrl?.includes('facebook.com');
@@ -72,6 +80,7 @@ export default function HomeScreen() {
     if (!finalUrl && (isFacebookShare || isThreadsShare)) {
       shareProcessed.current = true;
       lastShareTime.current = now;
+      lastProcessedUrl.current = null; // Mark as processed (no URL) so empty re-deliveries are skipped
       resetShareIntent();
       Alert.alert(
         "Can't read this link directly",
@@ -82,12 +91,16 @@ export default function HomeScreen() {
     }
 
     if (!finalUrl && !sharedText) {
-      console.log('[HomeScreen] completely empty intent — nothing to process');
+      console.log('[HomeScreen] completely empty intent — clearing');
+      shareProcessed.current = true;
+      lastShareTime.current = now;
+      resetShareIntent(); // Force clear stale native state
       return;
     }
 
     shareProcessed.current = true;
     lastShareTime.current = now;
+    lastProcessedUrl.current = finalUrl; // Track URL for dedup
     resetShareIntent();
     console.log('[HomeScreen] navigating to save with:', { finalUrl, textLen: textContent.length });
 
