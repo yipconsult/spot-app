@@ -94,6 +94,9 @@
                     "com.apple.security.application-groups": [
                       "group.com.spot.app.shared"
                     ]
+                  },
+                  "infoPlist": {
+                    "LSApplicationQueriesSchemes": ["spot"]
                   }
                 }
               ]

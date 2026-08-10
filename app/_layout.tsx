@@ -47,7 +47,7 @@ export default function RootLayout() {
     <AuthProvider>
       <PremiumProvider>
         <ThemeProvider>
-          <ShareIntentProvider options={{ resetOnBackground: false, debug: __DEV__ }}>
+          <ShareIntentProvider options={{ scheme: "spot", resetOnBackground: false, debug: __DEV__ }}>
             <StatusBar style="auto" />
             <RootNavigator />
           </ShareIntentProvider>
