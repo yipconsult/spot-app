@@ -1,23 +1,26 @@
 /**
  * Normalize a URL for deduplication and consistent storage.
- * - Converts Instagram deep links to web URLs
+ * - Converts deep links (instagram://, openrice://) to web URLs
  * - Forces https://
  * - Strips www.
  * - Removes trailing slashes from pathname
- * - Strips ALL query params for social platforms (they're only tracking noise)
+ * - Strips tracking params (all platforms)
+ * - Strips ALL query params for platforms where they're only tracking noise
  */
 export function normalizeUrl(raw: string): string {
   let url = raw.trim();
 
-  // Convert instagram:// deep links to web URLs
-  // instagram://reel/CODE → https://www.instagram.com/reel/CODE/
-  const deepLinkMatch = url.match(/^instagram:\/\/(?:media\?id=\d+|(reel|p|tv|stories)\/([A-Za-z0-9_-]+))/i);
-  if (deepLinkMatch) {
-    const type = deepLinkMatch[1] || 'p';
-    const code = deepLinkMatch[2];
-    if (code) {
-      url = `https://www.instagram.com/${type}/${code}/`;
-    }
+  // Convert deep links to web URLs
+  const instagramDeep = url.match(/^instagram:\/\/(?:media\?id=\d+|(reel|p|tv|stories)\/([A-Za-z0-9_-]+))/i);
+  if (instagramDeep) {
+    const type = instagramDeep[1] || 'p';
+    const code = instagramDeep[2];
+    if (code) url = `https://www.instagram.com/${type}/${code}/`;
+  }
+
+  // openrice://r/ID → https://www.openrice.com/hongkong/restaurant/ID
+  if (url.startsWith('openrice://')) {
+    url = url.replace('openrice://', 'https://www.openrice.com/');
   }
 
   try {
@@ -32,7 +35,7 @@ export function normalizeUrl(raw: string): string {
     // Remove trailing slashes from pathname (keep root "/")
     u.pathname = u.pathname.replace(/\/+$/, '') || '/';
 
-    // Strip known tracking params
+    // Strip known tracking params (all platforms)
     const trackingParams = [
       'igsh', 'igshid',
       'utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term',
@@ -42,12 +45,15 @@ export function normalizeUrl(raw: string): string {
       if (u.searchParams.has(p)) u.searchParams.delete(p);
     }
 
-    // For social platforms, strip ALL remaining query params — they're only tracking noise
+    // Platforms where ALL query params are tracking-only — safe to strip completely.
+    // OpenRice and Google Maps intentionally excluded — they have meaningful params.
     const socialDomains = [
       'instagram.com', 'threads.net',
-      'facebook.com', 'fb.com',
+      'facebook.com', 'fb.com', 'fb.watch',
       'youtube.com', 'youtu.be',
       'xhslink.com', 'xiaohongshu.com',
+      'pin.it', 'pinterest.com',
+      'dianping.com', 'dpurl.cn',
     ];
     if (socialDomains.some(d => u.hostname.includes(d))) {
       u.search = '';

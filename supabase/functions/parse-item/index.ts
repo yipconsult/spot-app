@@ -1,5 +1,5 @@
 // Main handler — wires all modules together
-import { supabase } from './config.ts';
+import { supabase, normalizeUrl } from './config.ts';
 import { detectPlatform, extractInstagramMeta, fetchOembed, fetchAndScrapeHtml } from './platforms.ts';
 import { extractFromGoogleMapsUrl, resolveGoogleMapsShortLink, resolveOpenRiceShortLink } from './maps.ts';
 import { extractTextFromThumbnail } from './vision.ts';
@@ -20,10 +20,11 @@ Deno.serve(async (req) => {
     }
 
     // ── 1. Check cache ──────────────────────────────────────
+    const normalizedUrl = normalizeUrl(url);
     const { data: existing } = await supabase
       .from("saved_items")
       .select("*")
-      .eq("source_url", url)
+      .eq("source_url", normalizedUrl)
       .single();
 
     if (existing) {
@@ -324,7 +325,7 @@ Deno.serve(async (req) => {
     if (hasName) {
       supabase.from("saved_items")
         .upsert({
-          source_url: url,
+          source_url: normalizedUrl,
           source_platform: platform as any,
           name_original: parsed.name_original || null,
           name_en: parsed.name_en || null,
