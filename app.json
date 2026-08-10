@@ -75,6 +75,12 @@
           "iosShareExtensionName": "SpotShare",
           "iosShareExtensionBundleIdentifier": "com.spot.app.hk.spotshare"
         }
+      ],
+      [
+        "./plugins/withShareExtensionQueriesSchemes",
+        {
+          "extensionName": "SpotShare"
+        }
       ]
     ],
     "experiments": {
@@ -94,9 +100,6 @@
                     "com.apple.security.application-groups": [
                       "group.com.spot.app.shared"
                     ]
-                  },
-                  "infoPlist": {
-                    "LSApplicationQueriesSchemes": ["spot"]
                   }
                 }
               ]
