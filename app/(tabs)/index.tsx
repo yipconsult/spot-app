@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { View, FlatList, StyleSheet, RefreshControl, TextInput, Text, TouchableOpacity, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useRouter, useFocusEffect } from 'expo-router';
+import { useRouter, useFocusEffect, usePathname } from 'expo-router';
 import { useShareIntentContext } from 'expo-share-intent';
 import { supabase } from '../../src/lib/supabase';
 import { useAuth } from '../../src/contexts/AuthContext';
@@ -15,6 +15,8 @@ export default function HomeScreen() {
   const { user } = useAuth();
   const t = useTheme();
   const router = useRouter();
+  const pathname = usePathname();
+  const isNavigatingToSave = useRef(false);
   const [saves, setSaves] = useState<UserSave[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -35,7 +37,7 @@ export default function HomeScreen() {
       webUrl: shareIntent.webUrl || '',
       hasText: !!(shareIntent.text),
     });
-  }, [hasShareIntent, shareIntent, isReady]);
+  }, [hasShareIntent, isReady]); // shareIntent intentionally excluded — object ref changes every render
 
   useEffect(() => {
     // Guard: prevent re-processing the same share within 3 seconds
@@ -102,6 +104,16 @@ export default function HomeScreen() {
     lastShareTime.current = now;
     lastProcessedUrl.current = finalUrl; // Track URL for dedup
     resetShareIntent();
+
+    // Navigation guard: don't push /save if already on it or already navigating
+    if (isNavigatingToSave.current || pathname === '/save') {
+      console.log('[HomeScreen] already on /save or navigating, skipping push');
+      return;
+    }
+
+    isNavigatingToSave.current = true;
+    setTimeout(() => { isNavigatingToSave.current = false; }, 3000);
+
     console.log('[HomeScreen] navigating to save with:', { finalUrl, textLen: textContent.length });
 
     router.push({

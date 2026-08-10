@@ -4,7 +4,7 @@
  * - Forces https://
  * - Strips www.
  * - Removes trailing slashes from pathname
- * - Strips tracking / query params
+ * - Strips ALL query params for social platforms (they're only tracking noise)
  */
 export function normalizeUrl(raw: string): string {
   let url = raw.trim();
@@ -32,20 +32,29 @@ export function normalizeUrl(raw: string): string {
     // Remove trailing slashes from pathname (keep root "/")
     u.pathname = u.pathname.replace(/\/+$/, '') || '/';
 
-    // Strip tracking / query params
+    // Strip known tracking params
     const trackingParams = [
       'igsh', 'igshid',
       'utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term',
       'fbclid', 'ref', 'si',
     ];
-    let changed = false;
     for (const p of trackingParams) {
-      if (u.searchParams.has(p)) {
-        u.searchParams.delete(p);
-        changed = true;
-      }
+      if (u.searchParams.has(p)) u.searchParams.delete(p);
     }
-    if (changed) url = u.toString();
+
+    // For social platforms, strip ALL remaining query params — they're only tracking noise
+    const socialDomains = [
+      'instagram.com', 'threads.net',
+      'facebook.com', 'fb.com',
+      'youtube.com', 'youtu.be',
+      'xhslink.com', 'xiaohongshu.com',
+    ];
+    if (socialDomains.some(d => u.hostname.includes(d))) {
+      u.search = '';
+    }
+
+    // ALWAYS update url — protocol/www/pathname changes must persist even without params
+    url = u.toString();
   } catch {
     /* not a valid URL, return as-is */
   }
