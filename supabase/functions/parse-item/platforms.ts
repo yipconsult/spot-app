@@ -38,10 +38,12 @@ export async function fetchOembed(url: string, platform: Platform): Promise<Oemb
     switch (platform) {
       case 'instagram':
       case 'threads':
+        // Only try oEmbed if we have a Facebook token — unauthenticated
+        // api.instagram.com/oembed is deprecated by Meta and returns errors.
         if (FB_APP_TOKEN) {
           oembedUrls.push(`https://graph.facebook.com/v22.0/instagram_oembed?url=${encodeURIComponent(url)}&access_token=${FB_APP_TOKEN}&fields=title,author_name,thumbnail_url`);
         }
-        oembedUrls.push(`https://api.instagram.com/oembed?url=${encodeURIComponent(url)}`);
+        // If no token, we skip oEmbed and fall straight to HTML scraping
         break;
       case 'facebook':
         if (FB_APP_TOKEN) {
@@ -116,12 +118,40 @@ export async function fetchAndScrapeHtml(url: string, platform?: Platform): Prom
       console.log(`[Scrape] Found og:image for ${platform}: ${ogImage.slice(0, 80)}`);
     }
 
+    // ── Priority content first (Gemini sees this before the 4K char limit) ──
+    // 1. Meta description — Instagram/Facebook put the full caption here
+    const descMeta = html.match(/<meta[^>]+name="description"[^>]+content="([^"]+)"/i)?.[1];
+    if (descMeta) parts.push(descMeta);
+
+    // 2. Title tag
+    const titleTag = html.match(/<title>([^<]+)<\/title>/i)?.[1];
+    if (titleTag) {
+      parts.push(`Page title: ${titleTag}`);
+      if (platform === 'instagram' || platform === 'threads') {
+        const captionMatch = titleTag.match(/"([^"]+)"/);
+        if (captionMatch && captionMatch[1].length > 5) {
+          parts.push(`Post caption: ${captionMatch[1]}`);
+        }
+      }
+    }
+
+    // 3. H1 headings (max 3)
+    const h1s = (html.match(/<h1[^>]*>([^<]+)<\/h1>/gi) || [])
+      .slice(0, 3)
+      .map(h => h.replace(/<[^>]+>/g, '').trim())
+      .filter(Boolean);
+    if (h1s.length) parts.push(`Headings: ${h1s.join(' | ')}`);
+
+    // ── Secondary content (filtered) ──
+    // 4. OG tags — video URLs already filtered above
     const ogTags = html.match(/<meta[^>]+property="og:([^"]+)"[^>]+content="([^"]*)"/gi) || [];
     for (const tag of ogTags) {
       const prop = tag.match(/property="og:([^"]+)"/i)?.[1];
       const content = tag.match(/content="([^"]*)"/i)?.[1];
-      if (prop && content && !['image', 'url', 'type', 'site_name', 'locale'].includes(prop)) {
-        parts.push(`og:${prop}: ${content}`);
+      // Skip images, site meta, and video URLs (huge, no useful content)
+      if (prop && content && !['image', 'url', 'type', 'site_name', 'locale', 'video', 'video:secure_url', 'video:type', 'video:width', 'video:height'].includes(prop)) {
+        // Truncate long values (e.g., tracking URLs)
+        parts.push(`og:${prop}: ${content.slice(0, 500)}`);
       }
     }
 
@@ -145,26 +175,6 @@ export async function fetchAndScrapeHtml(url: string, platform?: Platform): Prom
         if (ldParts.length) parts.push(ldParts.join('. '));
       } catch { /* skip malformed JSON-LD */ }
     }
-
-    const descMeta = html.match(/<meta[^>]+name="description"[^>]+content="([^"]+)"/i)?.[1];
-    if (descMeta) parts.push(descMeta);
-
-    const titleTag = html.match(/<title>([^<]+)<\/title>/i)?.[1];
-    if (titleTag) {
-      parts.push(`Page title: ${titleTag}`);
-      if (platform === 'instagram' || platform === 'threads') {
-        const captionMatch = titleTag.match(/"([^"]+)"/);
-        if (captionMatch && captionMatch[1].length > 5) {
-          parts.push(`Post caption: ${captionMatch[1]}`);
-        }
-      }
-    }
-
-    const h1s = (html.match(/<h1[^>]*>([^<]+)<\/h1>/gi) || [])
-      .slice(0, 3)
-      .map(h => h.replace(/<[^>]+>/g, '').trim())
-      .filter(Boolean);
-    if (h1s.length) parts.push(`Headings: ${h1s.join(' | ')}`);
 
     try {
       const pathname = new URL(url).pathname;
