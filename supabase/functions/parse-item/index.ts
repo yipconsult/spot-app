@@ -52,6 +52,7 @@ Deno.serve(async (req) => {
     const platform = detectPlatform(url);
     let promptText = inputText || "";
     let thumbnailUrl: string | null = null;
+    const parseDiag: string[] = [`platform:${platform}`];
 
     if (!promptText) {
       let scrapeUrl = url;
@@ -125,8 +126,10 @@ Deno.serve(async (req) => {
         if (oembedResult.text) {
           promptText = oembedResult.text;
           thumbnailUrl = oembedResult.thumbnailUrl;
+          parseDiag.push('source:oembed');
           console.log(`[Parse] Got oEmbed data for ${platform}, hasThumbnail: ${!!thumbnailUrl}`);
         } else {
+          parseDiag.push('source:scrape');
           const scrapeResult = await fetchAndScrapeHtml(scrapeUrl, platform);
           promptText = scrapeResult.text;
           // Use og:image from HTML scrape as thumbnail (enables RED vision OCR)
@@ -386,6 +389,7 @@ Deno.serve(async (req) => {
       thumbnail_url: thumbnailUrl || null,
       parse_hint: parseHint,
       cached: false,
+      _diag: parseDiag.join(' | '),
     }), { headers: { "Content-Type": "application/json" } });
 
   } catch (err) {

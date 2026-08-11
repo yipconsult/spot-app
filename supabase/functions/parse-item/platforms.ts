@@ -41,9 +41,12 @@ export async function fetchOembed(url: string, platform: Platform): Promise<Oemb
         // Only try oEmbed if we have a Facebook token — unauthenticated
         // api.instagram.com/oembed is deprecated by Meta and returns errors.
         if (FB_APP_TOKEN) {
+          const tokenPreview = FB_APP_TOKEN.slice(0, 8) + '...';
+          console.log(`[oEmbed] Using FB_APP_TOKEN: ${tokenPreview}`);
           oembedUrls.push(`https://graph.facebook.com/v22.0/instagram_oembed?url=${encodeURIComponent(url)}&access_token=${FB_APP_TOKEN}&fields=title,author_name,thumbnail_url`);
+        } else {
+          console.log(`[oEmbed] No FB_APP_TOKEN set — skipping oEmbed for ${platform}`);
         }
-        // If no token, we skip oEmbed and fall straight to HTML scraping
         break;
       case 'facebook':
         if (FB_APP_TOKEN) {
@@ -62,15 +65,18 @@ export async function fetchOembed(url: string, platform: Platform): Promise<Oemb
         headers: { "User-Agent": "Spot-App/1.0" },
       });
       if (!res.ok) {
-        console.log(`[oEmbed] ${platform} returned ${res.status} for ${oembedUrl.slice(0, 80)}...`);
+        const body = await res.text().catch(() => '');
+        console.log(`[oEmbed] ${platform} returned ${res.status}: ${body.slice(0, 200)}`);
         continue;
       }
 
       let data: Record<string, unknown>;
       try {
         data = await res.json();
+        console.log(`[oEmbed] ${platform} success — got keys: ${Object.keys(data).join(', ')}`);
       } catch {
-        console.log(`[oEmbed] ${platform} returned non-JSON response (likely HTML block page)`);
+        const body = await res.text().catch(() => '');
+        console.log(`[oEmbed] ${platform} returned non-JSON: ${body.slice(0, 200)}`);
         continue;
       }
       const parts: string[] = [];
