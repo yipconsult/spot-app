@@ -5,6 +5,7 @@ export type Platform = 'instagram' | 'threads' | 'facebook' | 'red' | 'pinterest
 export interface ParseRequest {
   url: string;
   text?: string;
+  skip_cache?: boolean;
 }
 
 export interface OembedResult {

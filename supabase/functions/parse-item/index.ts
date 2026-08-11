@@ -13,19 +13,25 @@ Deno.serve(async (req) => {
   }
 
   try {
-    const { url, text: inputText } = (await req.json()) as ParseRequest;
+    const { url, text: inputText, skip_cache: skipCache } = (await req.json()) as ParseRequest;
 
     if (!url) {
       return new Response(JSON.stringify({ error: "url is required" }), { status: 400 });
     }
 
     // ── 1. Check cache ──────────────────────────────────────
+    if (skipCache) console.log(`[Parse] Force re-parse — skipping cache`);
     const normalizedUrl = normalizeUrl(url);
-    const { data: existing } = await supabase
-      .from("saved_items")
-      .select("*")
-      .eq("source_url", normalizedUrl)
-      .single();
+    let existing = null;
+
+    if (!skipCache) {
+      const { data } = await supabase
+        .from("saved_items")
+        .select("*")
+        .eq("source_url", normalizedUrl)
+        .single();
+      existing = data;
+    }
 
     if (existing) {
       return new Response(JSON.stringify({
