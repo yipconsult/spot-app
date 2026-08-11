@@ -152,7 +152,7 @@ export default function SaveScreen() {
       }, { onConflict: 'user_id,saved_item_id' });
 
       if (saveErr) { Alert.alert('Error', saveErr.message); return; }
-      router.back();
+      router.replace('/(tabs)');
     } finally {
       isSavingRef.current = false;
     }
