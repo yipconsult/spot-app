@@ -34,15 +34,23 @@ export default function SaveScreen() {
 
   const lastFilledUrl = useRef<string | null>(null);
   const isSavingRef = useRef(false);
+  const isParsingRef = useRef(false);
+  const [saving, setSaving] = useState(false);
 
-  // Auto-parse when navigated here with a prefill URL (from HomeScreen share handling)
+  // Parse with re-entry lock + 30s timeout so a hung edge function can't wedge the screen
   const handleParseWithText = useCallback(async (parseUrl: string, sharedText?: string) => {
+    if (isParsingRef.current) return; // re-entry lock
+    isParsingRef.current = true;
     setParsing(true);
     const cleanUrl = normalizeUrl(parseUrl);
     try {
-      const { data: fnData, error: fnError } = await supabase.functions.invoke('parse-item', {
+      const invokePromise = supabase.functions.invoke('parse-item', {
         body: { url: cleanUrl, text: sharedText || undefined },
       });
+      const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), 30000));
+      const outcome = await Promise.race([invokePromise, timeoutPromise]);
+      if (!outcome) throw new Error('Timed out — the parser is taking too long');
+      const { data: fnData, error: fnError } = outcome as { data: unknown; error: unknown };
       if (fnError) throw fnError;
       const data = fnData as Record<string, unknown>;
       setResult(data as unknown as ParseResult);
@@ -57,6 +65,7 @@ export default function SaveScreen() {
       });
     } finally {
       setParsing(false);
+      isParsingRef.current = false;
     }
   }, []);
 
@@ -104,11 +113,22 @@ export default function SaveScreen() {
   };
 
   const handleSave = async () => {
-    if (!user || !result) return;
+    if (!user || !result) {
+      Alert.alert('Nothing to save', 'Parse a link first, then save the spot.');
+      return;
+    }
 
     // Lock: prevent double-tap / race-condition duplicates
     if (isSavingRef.current) return;
     isSavingRef.current = true;
+    setSaving(true);
+
+    // Watchdog: force-release the lock if the network hangs (fixes "can't save" after a stalled attempt)
+    const watchdog = setTimeout(() => {
+      isSavingRef.current = false;
+      setSaving(false);
+      Alert.alert('Slow network', 'The save is taking longer than expected. Please try again.');
+    }, 15000);
 
     try {
       const cleanUrl = normalizeUrl(url.trim());
@@ -154,7 +174,9 @@ export default function SaveScreen() {
       if (saveErr) { Alert.alert('Error', saveErr.message); return; }
       router.replace('/(tabs)');
     } finally {
+      clearTimeout(watchdog);
       isSavingRef.current = false;
+      setSaving(false);
     }
   };
 
@@ -268,12 +290,16 @@ export default function SaveScreen() {
           <Text style={[styles.editLabel, { color: t.textSecondary }]}>Source URL</Text>
           <Text style={[styles.urlText, { color: t.textTertiary }]} numberOfLines={1}>{url}</Text>
 
-          <TouchableOpacity style={styles.saveBtn} onPress={handleSave}>
-            <Ionicons name="bookmark" size={18} color="#FFF" />
-            <Text style={styles.saveBtnText}>Save to My Spots</Text>
+          <TouchableOpacity
+            style={[styles.saveBtn, saving && styles.saveBtnDisabled]}
+            onPress={handleSave}
+            disabled={saving}
+          >
+            <Ionicons name={saving ? 'hourglass' : 'bookmark'} size={18} color="#FFF" />
+            <Text style={styles.saveBtnText}>{saving ? 'Saving...' : 'Save to My Spots'}</Text>
           </TouchableOpacity>
 
-          <TouchableOpacity style={styles.reparseBtn} onPress={handleParse}>
+          <TouchableOpacity style={styles.reparseBtn} onPress={handleParse} disabled={parsing}>
             <Text style={styles.reparseBtnText}>Re-parse URL</Text>
           </TouchableOpacity>
         </ScrollView>
@@ -298,9 +324,13 @@ export default function SaveScreen() {
           placeholder="https://..."
           placeholderTextColor={t.textTertiary}
         />
-        <TouchableOpacity style={styles.parseBtn} onPress={handleParse}>
+        <TouchableOpacity
+          style={[styles.parseBtn, parsing && styles.saveBtnDisabled]}
+          onPress={handleParse}
+          disabled={parsing}
+        >
           <Ionicons name="sparkles" size={18} color="#FFF" />
-          <Text style={styles.parseBtnText}>Parse & Edit</Text>
+          <Text style={styles.parseBtnText}>{parsing ? 'Parsing...' : 'Parse & Edit'}</Text>
         </TouchableOpacity>
       </ScrollView>
     </KeyboardAvoidingView>
@@ -337,6 +367,7 @@ const styles = StyleSheet.create({
   chipTextActive: { color: '#FFF' },
   urlText: { fontSize: 12, color: '#8E8E93', marginTop: 4 },
   saveBtn: { marginTop: 24, backgroundColor: '#FF6B35', paddingVertical: 16, borderRadius: 12, alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 8 },
+  saveBtnDisabled: { opacity: 0.6 },
   saveBtnText: { fontSize: 16, fontWeight: '700', color: '#FFF' },
   reparseBtn: { marginTop: 10, paddingVertical: 12, alignItems: 'center' },
   reparseBtnText: { fontSize: 14, color: '#8E8E93', fontWeight: '600' },

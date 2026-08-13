@@ -33,7 +33,6 @@ function RootNavigator() {
       <Stack.Screen name="(tabs)" />
       <Stack.Screen name="item/[id]" options={{ headerShown: true, title: 'Spot Details', headerBackTitle: 'Back' }} />
       <Stack.Screen name="save" options={{ headerShown: true, title: 'Save a Spot', presentation: 'modal' }} />
-      <Stack.Screen name="share" options={{ headerShown: false }} />
       <Stack.Screen name="list/[id]" options={{ headerShown: true, title: 'List' }} />
       <Stack.Screen name="join" options={{ headerShown: true, title: 'Join List', presentation: 'modal' }} />
       <Stack.Screen name="auth" />
@@ -47,7 +46,7 @@ export default function RootLayout() {
     <AuthProvider>
       <PremiumProvider>
         <ThemeProvider>
-          <ShareIntentProvider options={{ scheme: "spot", resetOnBackground: false, debug: __DEV__ }}>
+          <ShareIntentProvider options={{ scheme: "spot", resetOnBackground: true, debug: __DEV__ }}>
             <StatusBar style="auto" />
             <RootNavigator />
           </ShareIntentProvider>
