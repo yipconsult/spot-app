@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { View, TextInput, TouchableOpacity, Text, StyleSheet, Alert, KeyboardAvoidingView, Platform, ScrollView } from 'react-native';
+import { View, TextInput, TouchableOpacity, Text, StyleSheet, Alert, KeyboardAvoidingView, Platform, ScrollView, AppState } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { supabase } from '../src/lib/supabase';
@@ -69,6 +69,17 @@ export default function SaveScreen() {
     }
   }, []);
 
+  // T6: if the app is backgrounded mid-parse, the request may be cancelled.
+  // On return, hint the user to retry if nothing arrived.
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state === 'active' && isParsingRef.current) {
+        setParseHint('Parsing may have been interrupted while the app was in the background. Tap "Parse & Edit" again if no result appears.');
+      }
+    });
+    return () => sub.remove();
+  }, []);
+
   // When navigated from a share, pre-fill the URL but don't auto-parse.
   // User sees the URL, can edit it if wrong, then taps "Parse & Edit" manually.
   // This avoids timeout issues with slow edge function responses.
@@ -113,7 +124,8 @@ export default function SaveScreen() {
   };
 
   const handleSave = async () => {
-    if (!user || !result) {
+    const hasUsefulResult = result && (result.name_en || result.name_original || result.address_en || result.address_original);
+    if (!user || !hasUsefulResult) {
       Alert.alert('Nothing to save', 'Parse a link first, then save the spot.');
       return;
     }

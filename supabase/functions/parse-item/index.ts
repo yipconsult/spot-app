@@ -330,12 +330,28 @@ Deno.serve(async (req) => {
     }
 
     // ── 5. Cache result (fire-and-forget) ────────────────────
+    // Map internal platform names to the DB enum values
+    // (DB enum: instagram, red, facebook, pinterest, threads, youtube_reels, manual)
+    const platformMap: Record<string, string> = {
+      instagram: 'instagram',
+      threads: 'threads',
+      facebook: 'facebook',
+      red: 'red',
+      pinterest: 'pinterest',
+      youtube: 'youtube_reels',
+      openrice: 'manual',
+      googlemaps: 'manual',
+      dianping: 'manual',
+      other: 'manual',
+    };
+    const dbPlatform = platformMap[platform] || 'manual';
+
     const hasName = !!(parsed.name_en || parsed.name_original);
     if (hasName) {
       supabase.from("saved_items")
         .upsert({
           source_url: normalizedUrl,
-          source_platform: platform as any,
+          source_platform: dbPlatform,
           name_original: parsed.name_original || null,
           name_en: parsed.name_en || null,
           address_original: parsed.address_original || null,
