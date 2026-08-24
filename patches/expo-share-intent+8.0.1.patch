@@ -1,0 +1,15 @@
+diff --git a/node_modules/expo-share-intent/plugin/build/ios/writeIosShareExtensionFiles.js b/node_modules/expo-share-intent/plugin/build/ios/writeIosShareExtensionFiles.js
+index 9ceec1c..662778f 100644
+--- a/node_modules/expo-share-intent/plugin/build/ios/writeIosShareExtensionFiles.js
++++ b/node_modules/expo-share-intent/plugin/build/ios/writeIosShareExtensionFiles.js
+@@ -88,6 +88,10 @@ function getShareExtensionInfoContent(appName, appIdentifier, parameters) {
+         },
+         // use in ExpoShareIntentModule.swift
+         AppGroupIdentifier: (0, constants_1.getAppGroup)(appIdentifier, parameters),
++        // PATCH (spot-app): required on iOS 18+ so the extension's
++        // UIApplication.canOpenURL("spot://") returns true — without it the
++        // extension shows an invisible error alert and hangs the host app.
++        LSApplicationQueriesSchemes: ["spot"],
+     });
+ }
+ //: [root]/ios/ShareExtension/PrivacyInfo.xcprivacy

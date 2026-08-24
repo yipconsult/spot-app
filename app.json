@@ -75,12 +75,6 @@
           "iosShareExtensionName": "SpotShare",
           "iosShareExtensionBundleIdentifier": "com.spot.app.hk.spotshare"
         }
-      ],
-      [
-        "./plugins/withShareExtensionQueriesSchemes",
-        {
-          "extensionName": "SpotShare"
-        }
       ]
     ],
     "experiments": {

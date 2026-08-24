@@ -222,15 +222,18 @@ Deno.serve(async (req) => {
     const hasAddress = !!(parsed.address_en || parsed.address_original);
     const isSocial = platform === 'instagram' || platform === 'threads' || platform === 'red' || platform === 'facebook' || platform === 'openrice' || platform === 'dianping' || platform === 'youtube';
 
-    // Tier 1: Name extracted but no address
+    // Tier 1: Name extracted but no address — run Gemini + Nominatim in parallel
     if (searchName && !hasAddress) {
       console.log(`[Enrich] Tier 1 — name found, looking up: ${searchName}`);
 
-      const geminiEnriched = await enrichWithGemini(searchName, {
-        name_en: parsed.name_en,
-        name_original: parsed.name_original,
-        category: parsed.category,
-      });
+      const [geminiEnriched, nominatimResult] = await Promise.all([
+        enrichWithGemini(searchName, {
+          name_en: parsed.name_en,
+          name_original: parsed.name_original,
+          category: parsed.category,
+        }),
+        enrichWithNominatim(searchName),
+      ]);
 
       if (geminiEnriched && Object.keys(geminiEnriched).length > 0) {
         parsed = {
@@ -246,22 +249,20 @@ Deno.serve(async (req) => {
         console.log(`[Enrich] Gemini filled: ${Object.keys(geminiEnriched).join(', ')}`);
       }
 
+      // Nominatim is FALLBACK ONLY — never overwrite a good Gemini address
       const stillNoAddress = !parsed.address_en && !parsed.address_original;
-      if (stillNoAddress) {
-        const nominatimResult = await enrichWithNominatim(searchName);
-        if (nominatimResult.address_en) {
-          parsed.address_en = nominatimResult.address_en as string;
-          if (nominatimResult.district && !parsed.district) {
-            parsed.district = nominatimResult.district as string;
-          }
-          if (!parsed.name_en && nominatimResult.address_en) {
-            const firstPart = (nominatimResult.address_en as string).split(',')[0]?.trim();
-            if (firstPart && !firstPart.match(/^\d/)) {
-              parsed.name_en = parsed.name_en || firstPart;
-            }
-          }
-          console.log(`[Enrich] Nominatim found address`);
+      if (stillNoAddress && nominatimResult.address_en) {
+        parsed.address_en = nominatimResult.address_en as string;
+        if (nominatimResult.district && !parsed.district) {
+          parsed.district = nominatimResult.district as string;
         }
+        if (!parsed.name_en && nominatimResult.address_en) {
+          const firstPart = (nominatimResult.address_en as string).split(',')[0]?.trim();
+          if (firstPart && !firstPart.match(/^\d/)) {
+            parsed.name_en = parsed.name_en || firstPart;
+          }
+        }
+        console.log(`[Enrich] Nominatim found address`);
       }
     }
 
@@ -346,8 +347,10 @@ Deno.serve(async (req) => {
     };
     const dbPlatform = platformMap[platform] || 'manual';
 
+    // Cache when name OR address exists (address-only results are worth caching too)
     const hasName = !!(parsed.name_en || parsed.name_original);
-    if (hasName) {
+    const hasAnyData = hasName || !!(parsed.address_en || parsed.address_original);
+    if (hasAnyData) {
       supabase.from("saved_items")
         .upsert({
           source_url: normalizedUrl,

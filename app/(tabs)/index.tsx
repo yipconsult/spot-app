@@ -23,20 +23,30 @@ export default function HomeScreen() {
 
   // Handle shared content from iOS Share Extension
   const { hasShareIntent, shareIntent, resetShareIntent, isReady } = useShareIntentContext();
-  const lastPushAt = useRef(0);
+  // Share intent ONLY: 1.5s throttle (blocks native re-delivery, not user actions)
+  const lastSharePushAt = useRef(0);
   const lastProcessedKey = useRef<string | null>(null);
 
   useEffect(() => {
     console.log('[HomeScreen] share intent state:', {
       hasShareIntent,
       isReady,
-      webUrl: shareIntent.webUrl || '',
-      hasText: !!(shareIntent.text),
+      lastPush: lastSharePushAt.current,
+      lastKey: lastProcessedKey.current,
     });
   }, [hasShareIntent, isReady]); // shareIntent intentionally excluded — object ref changes every render
 
   useEffect(() => {
     if (!hasShareIntent || !isReady) return;
+
+    const now = Date.now();
+
+    // 1.5s throttle: blocks rapid native re-delivery only
+    if (now - lastSharePushAt.current < 1500) {
+      console.log('[HomeScreen] share intent throttled (native re-delivery)');
+      resetShareIntent();
+      return;
+    }
 
     const sharedText = shareIntent.text || '';
     const sharedWebUrl = shareIntent.webUrl || '';
@@ -46,7 +56,7 @@ export default function HomeScreen() {
     const urlFromText = extractUrl(textContent) || textContent.match(/https?:\/\/[^\s]+/)?.[0] || '';
     const rawUrl = sharedWebUrl || urlFromText;
     const finalUrl = rawUrl ? normalizeUrl(rawUrl) : '';
-    // Covers text-only shares too — empty key falls through to the empty branch below
+    // Dedup key: URL if present, otherwise first 200 chars of text
     const dedupKey = finalUrl || textContent.slice(0, 200);
 
     console.log('[HomeScreen] share intent data:', {
@@ -58,16 +68,16 @@ export default function HomeScreen() {
       type: shareIntent.type,
     });
 
-    // ── 5-second push throttle: consumes rapid native re-emissions ─
-    if (Date.now() - lastPushAt.current < 5000) {
-      console.log('[HomeScreen] within 5s throttle — clearing re-emission');
+    // ── Dedup: identical share within the same session → skip ─
+    if (dedupKey && dedupKey === lastProcessedKey.current) {
+      console.log('[HomeScreen] dedup blocked:', dedupKey.slice(0, 80));
       resetShareIntent();
       return;
     }
 
-    // ── Dedup: same URL/text already processed this session ─
-    if (dedupKey && dedupKey === lastProcessedKey.current) {
-      console.log('[HomeScreen] duplicate share key, skipping:', dedupKey.slice(0, 80));
+    // ── Completely empty intent → clear native state and bail ─
+    if (!finalUrl && !sharedText) {
+      console.log('[HomeScreen] empty intent, clearing');
       resetShareIntent();
       return;
     }
@@ -78,7 +88,7 @@ export default function HomeScreen() {
     const isThreadsShare = lowerText.includes('threads') || sharedWebUrl?.includes('threads.net');
 
     if (!finalUrl && (isFacebookShare || isThreadsShare)) {
-      lastPushAt.current = Date.now();
+      lastSharePushAt.current = now;
       lastProcessedKey.current = dedupKey;
       resetShareIntent();
       Alert.alert(
@@ -89,18 +99,11 @@ export default function HomeScreen() {
       return;
     }
 
-    if (!finalUrl && !sharedText) {
-      console.log('[HomeScreen] completely empty intent — clearing');
-      lastPushAt.current = Date.now();
-      resetShareIntent();
-      return;
-    }
-
-    lastPushAt.current = Date.now();
+    lastSharePushAt.current = now;
     lastProcessedKey.current = dedupKey;
     resetShareIntent();
 
-    console.log('[HomeScreen] navigating to save with:', { finalUrl, textLen: textContent.length });
+    console.log('[HomeScreen] navigating to save:', { finalUrl: finalUrl.slice(0, 80), textLen: textContent.length });
 
     router.push({
       pathname: '/save',
@@ -148,11 +151,7 @@ export default function HomeScreen() {
     <View style={[styles.container, { backgroundColor: t.bg }]}>
       {/* Clipboard banner */}
       {clipUrl && (
-        <TouchableOpacity style={styles.clipBanner} onPress={() => {
-          if (Date.now() - lastPushAt.current < 5000) return;
-          lastPushAt.current = Date.now();
-          router.push({ pathname: '/save', params: { prefillUrl: clipUrl } });
-        }}>
+        <TouchableOpacity style={styles.clipBanner} onPress={() => router.push({ pathname: '/save', params: { prefillUrl: clipUrl } })}>
           <Ionicons name="link" size={16} color="#FFF" />
           <Text style={styles.clipText}>Save this link to Spot</Text>
           <Ionicons name="chevron-forward" size={16} color="#FFF" />
@@ -195,12 +194,7 @@ export default function HomeScreen() {
       />
 
       {/* FAB: Add */}
-      <TouchableOpacity style={styles.fab} onPress={() => {
-        // Throttle: block push within 5s of a share push (prevents stacked modals)
-        if (Date.now() - lastPushAt.current < 5000) return;
-        lastPushAt.current = Date.now();
-        router.push('/save');
-      }} activeOpacity={0.8}>
+      <TouchableOpacity style={styles.fab} onPress={() => router.push('/save')} activeOpacity={0.8}>
         <Ionicons name="add" size={28} color="#FFF" />
       </TouchableOpacity>
     </View>

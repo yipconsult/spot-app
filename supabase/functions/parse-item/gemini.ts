@@ -92,7 +92,7 @@ export async function geminiExtract(inputText: string): Promise<Record<string, u
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       contents: [{ parts: [{ text: `${SYSTEM_PROMPT}\n\n---\nContent to analyze:\n${inputText.substring(0, 4000)}\n---\nExtract the MAIN place. Return ONLY JSON.` }] }],
-      generationConfig: { responseMimeType: "application/json", temperature: 0.1, maxOutputTokens: 4096 },
+      generationConfig: { responseMimeType: "application/json", temperature: 0.1, maxOutputTokens: 2048 },
     }),
   });
   if (!res.ok) throw new Error(`Gemini error: ${res.status}`);

@@ -80,21 +80,22 @@ export default function SaveScreen() {
     return () => sub.remove();
   }, []);
 
-  // When navigated from a share, pre-fill the URL but don't auto-parse.
-  // User sees the URL, can edit it if wrong, then taps "Parse & Edit" manually.
-  // This avoids timeout issues with slow edge function responses.
+  // When navigated from a share, pre-fill the URL and auto-parse.
+  // (30s timeout + re-entry lock in handleParseWithText protect against
+  // slow/hung edge function responses.)
   useEffect(() => {
     const rawPrefill = params.prefillUrl || params.url || '';
     const prefill = rawPrefill ? decodeURIComponent(rawPrefill) : '';
+    const sharedText = params.sharedText || '';
 
     if (prefill && prefill !== lastFilledUrl.current) {
       lastFilledUrl.current = prefill;
       setResult(null);
       setParseHint(null);
       setUrl(prefill);
-      // Don't auto-parse. User taps "Parse & Edit" when ready.
+      handleParseWithText(prefill, sharedText || undefined);
     }
-  }, [params.prefillUrl, params.url]);
+  }, [params.prefillUrl, params.url, params.sharedText, handleParseWithText]);
 
   const handleParse = () => handleParseWithText(url);
 
