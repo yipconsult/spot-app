@@ -6,6 +6,9 @@ const SYSTEM_PROMPT = `You are a Hong Kong location data extractor. Extract the 
 
 The input mixes English, Traditional Chinese (Cantonese), and Simplified Chinese. Preserve all original scripts.
 
+## GEOGRAPHIC LIMIT (STRICT)
+This app ONLY serves Hong Kong. If the place mentioned is in Taiwan (台北/台中/台南/高雄), Japan (東京/大阪/京都/札幌), mainland China, or anywhere else outside Hong Kong — return null for ALL fields (name, address, district, tags) and category "other". Do NOT suggest a similar-sounding Hong Kong place as a substitute.
+
 ## NAME DETECTION
 Look for place names using these patterns:
 - 【店名】 / 《店名》 / 「店名」 / "[Name]"
@@ -83,6 +86,7 @@ Return ONLY a JSON object (no markdown, no backticks):
   "district": "district name from mapping above, or null",
   "price_hint": "$"|"$$"|"$$$"|"HK$" range, or null,
   "tags": ["tag1","tag2"],
+  "candidates": [{"name_en": "other place name", "name_original": "另一間店名"}, ...max 3 total, ONLY when the post clearly mentions MULTIPLE distinct places — otherwise empty array []],
   "raw_text": "the original input text"
 }`;
 

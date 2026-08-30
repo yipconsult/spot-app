@@ -152,6 +152,7 @@ export interface ParseResult {
   price_hint: string | null;
   tags: string[];
   raw_text: string;
+  candidates?: { name_en?: string | null; name_original?: string | null }[];
 }
 
 // ── Display helpers ──────────────────────────────────────────

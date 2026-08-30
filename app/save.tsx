@@ -236,6 +236,33 @@ export default function SaveScreen() {
             </View>
           )}
 
+          {/* Multi-place candidates: post mentioned several places — let the user pick */}
+          {(result.candidates?.length ?? 0) > 1 && (
+            <View style={styles.candidatesWrap}>
+              <Text style={[styles.candidatesLabel, { color: t.textSecondary }]}>
+                Multiple places found — tap to use:
+              </Text>
+              <View style={styles.candidatesRow}>
+                {result.candidates!.map((c, i) => (
+                  <TouchableOpacity
+                    key={i}
+                    style={styles.candidateChip}
+                    onPress={() => setResult({
+                      ...result,
+                      name_en: c.name_en || result.name_en,
+                      name_original: c.name_original || result.name_original,
+                      candidates: [],
+                    })}
+                  >
+                    <Text style={styles.candidateChipText}>
+                      {c.name_en || c.name_original || `Option ${i + 1}`}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+          )}
+
           {/* Name (English) + Look Up button in a row */}
           <Text style={[styles.editLabel, { color: t.textSecondary }]}>Name (English)</Text>
           <View style={styles.nameRow}>
@@ -400,6 +427,11 @@ const styles = StyleSheet.create({
   reparseBtn: { marginTop: 10, paddingVertical: 12, alignItems: 'center' },
   reparseBtnText: { fontSize: 14, color: '#8E8E93', fontWeight: '600' },
   nameRow: { flexDirection: 'row', gap: 8, alignItems: 'center' },
+  candidatesWrap: { marginTop: 14, marginBottom: 4 },
+  candidatesLabel: { fontSize: 13, fontWeight: '700', marginBottom: 6 },
+  candidatesRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
+  candidateChip: { backgroundColor: '#E8F0FF', paddingHorizontal: 12, paddingVertical: 7, borderRadius: 8 },
+  candidateChipText: { fontSize: 13, fontWeight: '600', color: '#007AFF' },
   nameInput: { flex: 1 },
   lookupBtn: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#007AFF', paddingHorizontal: 14, paddingVertical: 12, borderRadius: 10, gap: 4 },
   lookupText: { color: '#FFF', fontWeight: '700', fontSize: 13 },

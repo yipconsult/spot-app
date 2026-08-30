@@ -11,6 +11,9 @@ export async function enrichWithGemini(
 
 Current data: ${JSON.stringify(current)}
 
+IMPORTANT: Only fill a field if you are genuinely confident. If you are guessing or
+the name could refer to multiple places, return null for that field.
+
 Return ONLY a JSON object with the MISSING or UNCERTAIN fields filled in:
 {
   "address_en": "full English address in Hong Kong, or null if truly unknown",
@@ -18,7 +21,8 @@ Return ONLY a JSON object with the MISSING or UNCERTAIN fields filled in:
   "district": "one of: Central & Western, Wan Chai, Eastern, Southern, Yau Tsim Mong, Sham Shui Po, Kowloon City, Wong Tai Sin, Kwun Tong, Kwai Tsing, Tsuen Wan, Tuen Mun, Yuen Long, North, Tai Po, Sha Tin, Sai Kung, Islands",
   "category": "restaurant|cafe|bar|activity|event|attraction|shopping|other",
   "price_hint": "$ / $$ / $$$ / HK$ range, or null",
-  "tags": ["tag1", "tag2"]
+  "tags": ["tag1", "tag2"],
+  "confidence": "high|medium|low"
 }`;
 
   try {
@@ -36,7 +40,19 @@ Return ONLY a JSON object with the MISSING or UNCERTAIN fields filled in:
     }
     const data = await res.json();
     const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
-    return safeParseGeminiJson(rawText);
+    const result = safeParseGeminiJson(rawText);
+
+    // Confidence gate: discard low-confidence guesses entirely.
+    // This is the hallucination kill-switch — "北角街坊食堂" style inventions
+    // come from low-confidence enrichment being merged blindly.
+    if (result.confidence === 'low') {
+      console.log(`[Enrich] Low confidence for "${name}" — discarding all fields`);
+      return {};
+    }
+    // Medium confidence: only merge fields that don't contradict existing data
+    // (handled by the caller's || fallback — we just pass through with the flag).
+    delete result.confidence;
+    return result;
   } catch (err) {
     console.log("[Enrich] Gemini failed:", err);
     return {};
@@ -60,6 +76,19 @@ export async function enrichWithNominatim(name: string): Promise<Record<string, 
 
     const r = results[0];
     const displayName = r.display_name as string || '';
+    const lat = parseFloat(r.lat);
+    const lon = parseFloat(r.lon);
+
+    // HK bounding box gate: reject results outside Hong Kong (fixes
+    // Taiwan/Japan suggestions). HK spans roughly 22.15–22.60 N, 113.80–114.50 E.
+    const isHKBox = !isNaN(lat) && !isNaN(lon) &&
+      lat >= 22.15 && lat <= 22.60 &&
+      lon >= 113.80 && lon <= 114.50;
+    const mentionsHK = /Hong Kong|香港/i.test(displayName);
+    if (!isHKBox || !mentionsHK) {
+      console.log(`[Nominatim] Rejected non-HK result for "${name}": ${displayName.slice(0, 60)}`);
+      return {};
+    }
 
     const districtMatch = displayName.match(/(?:Central & Western|Wan Chai|Eastern|Southern|Yau Tsim Mong|Sham Shui Po|Kowloon City|Wong Tai Sin|Kwun Tong|Kwai Tsing|Tsuen Wan|Tuen Mun|Yuen Long|North|Tai Po|Sha Tin|Sai Kung|Islands)/i);
 
@@ -82,6 +111,8 @@ export async function reverseLookupFromAddress(
 
 Address: ${address}
 
+If you cannot identify the place with confidence, return null fields — do NOT guess.
+
 Return ONLY a JSON object:
 {
   "name_en": "English name of the place, or null if not identifiable",
@@ -89,7 +120,8 @@ Return ONLY a JSON object:
   "category": "restaurant|cafe|bar|activity|event|attraction|shopping|other",
   "district": "HK district, or null",
   "price_hint": "$/$$/$$$ or null",
-  "tags": ["tag1", "tag2"]
+  "tags": ["tag1", "tag2"],
+  "confidence": "high|medium|low"
 }`;
 
   try {
@@ -107,7 +139,14 @@ Return ONLY a JSON object:
     }
     const data = await res.json();
     const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
-    return safeParseGeminiJson(rawText);
+    const result = safeParseGeminiJson(rawText);
+    // Confidence gate: discard low-confidence name inventions
+    if (result.confidence === 'low') {
+      console.log(`[ReverseLookup] Low confidence for address — discarding`);
+      return {};
+    }
+    delete result.confidence;
+    return result;
   } catch (err) {
     console.log("[ReverseLookup] Gemini failed:", err);
     return {};

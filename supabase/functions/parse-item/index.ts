@@ -79,6 +79,21 @@ Deno.serve(async (req) => {
         }
 
         const gmapsData = extractFromGoogleMapsUrl(scrapeUrl);
+
+        // HK bounding box gate: reject places outside Hong Kong (22.15–22.60 N, 113.80–114.50 E)
+        if (gmapsData.lat && gmapsData.lng &&
+            (gmapsData.lat < 22.15 || gmapsData.lat > 22.60 || gmapsData.lng < 113.80 || gmapsData.lng > 114.50)) {
+          console.log(`[Parse] Google Maps — coords outside HK (${gmapsData.lat}, ${gmapsData.lng}), rejecting`);
+          return new Response(JSON.stringify({
+            name_original: null, name_en: null,
+            address_original: null, address_en: null,
+            category: "other", district: null, price_hint: null,
+            tags: [], raw_text: url,
+            outside_hk: true,
+            parse_hint: `This place is outside Hong Kong — Spot currently only supports places in Hong Kong.`,
+          }), { headers: { "Content-Type": "application/json" } });
+        }
+
         if (gmapsData.placeName) {
           promptText = `Google Maps Place: ${gmapsData.placeName}`;
           if (gmapsData.lat && gmapsData.lng) {
@@ -407,6 +422,7 @@ Deno.serve(async (req) => {
       raw_text: parsed.raw_text || promptText,
       thumbnail_url: thumbnailUrl || null,
       parse_hint: parseHint,
+      candidates: (parsed.candidates as Record<string, unknown>[]) || [],
       cached: false,
       _diag: parseDiag.join(' | '),
     }), { headers: { "Content-Type": "application/json" } });
