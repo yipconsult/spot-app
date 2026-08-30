@@ -110,6 +110,10 @@ export default function HomeScreen() {
       return;
     }
 
+    // Optimistic lock: set synchronously BEFORE the push. The modal's mount
+    // effect would set it too late — a second emission could slip through.
+    navState.saveOpen = true;
+
     console.log('[HomeScreen] navigating to save:', { finalUrl: finalUrl.slice(0, 80), textLen: textContent.length });
 
     router.push({
@@ -160,7 +164,11 @@ export default function HomeScreen() {
       {clipUrl && (
         <TouchableOpacity
           style={styles.clipBanner}
-          onPress={() => { if (!navState.saveOpen) router.push({ pathname: '/save', params: { prefillUrl: clipUrl } }); }}
+          onPress={() => {
+            if (navState.saveOpen) return;
+            navState.saveOpen = true;
+            router.push({ pathname: '/save', params: { prefillUrl: clipUrl } });
+          }}
         >
           <Ionicons name="link" size={16} color="#FFF" />
           <Text style={styles.clipText}>Save this link to Spot</Text>
@@ -206,7 +214,11 @@ export default function HomeScreen() {
       {/* FAB: Add */}
       <TouchableOpacity
         style={styles.fab}
-        onPress={() => { if (!navState.saveOpen) router.push('/save'); }}
+        onPress={() => {
+          if (navState.saveOpen) return;
+          navState.saveOpen = true;
+          router.push('/save');
+        }}
         activeOpacity={0.8}
       >
         <Ionicons name="add" size={28} color="#FFF" />
