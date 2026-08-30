@@ -10,6 +10,7 @@ import { UserSave } from '../../src/types';
 import { ItemCard } from '../../src/components/ItemCard';
 import { checkClipboard, extractUrl } from '../../src/lib/clipboard';
 import { normalizeUrl } from '../../src/lib/url';
+import { navState } from '../../src/lib/navState';
 
 export default function HomeScreen() {
   const { user } = useAuth();
@@ -103,6 +104,12 @@ export default function HomeScreen() {
     lastProcessedKey.current = dedupKey;
     resetShareIntent();
 
+    // Don't stack a second save modal on top of an open one
+    if (navState.saveOpen) {
+      console.log('[HomeScreen] save modal already open — skipping push');
+      return;
+    }
+
     console.log('[HomeScreen] navigating to save:', { finalUrl: finalUrl.slice(0, 80), textLen: textContent.length });
 
     router.push({
@@ -151,7 +158,10 @@ export default function HomeScreen() {
     <View style={[styles.container, { backgroundColor: t.bg }]}>
       {/* Clipboard banner */}
       {clipUrl && (
-        <TouchableOpacity style={styles.clipBanner} onPress={() => router.push({ pathname: '/save', params: { prefillUrl: clipUrl } })}>
+        <TouchableOpacity
+          style={styles.clipBanner}
+          onPress={() => { if (!navState.saveOpen) router.push({ pathname: '/save', params: { prefillUrl: clipUrl } }); }}
+        >
           <Ionicons name="link" size={16} color="#FFF" />
           <Text style={styles.clipText}>Save this link to Spot</Text>
           <Ionicons name="chevron-forward" size={16} color="#FFF" />
@@ -194,7 +204,11 @@ export default function HomeScreen() {
       />
 
       {/* FAB: Add */}
-      <TouchableOpacity style={styles.fab} onPress={() => router.push('/save')} activeOpacity={0.8}>
+      <TouchableOpacity
+        style={styles.fab}
+        onPress={() => { if (!navState.saveOpen) router.push('/save'); }}
+        activeOpacity={0.8}
+      >
         <Ionicons name="add" size={28} color="#FFF" />
       </TouchableOpacity>
     </View>

@@ -7,6 +7,7 @@ import { useAuth } from '../src/contexts/AuthContext';
 import { useTheme } from '../src/contexts/ThemeContext';
 import { ParseResult, Category, CATEGORY_LABELS } from '../src/types';
 import { normalizeUrl } from '../src/lib/url';
+import { navState } from '../src/lib/navState';
 
 function detectPlatformFromUrl(url: string): string {
   const u = url.toLowerCase();
@@ -36,6 +37,12 @@ export default function SaveScreen() {
   const isSavingRef = useRef(false);
   const isParsingRef = useRef(false);
   const parseGenerationRef = useRef(0);
+
+  // Mark the save modal as open so HomeScreen never stacks a second one
+  useEffect(() => {
+    navState.saveOpen = true;
+    return () => { navState.saveOpen = false; };
+  }, []);
   const interruptedRef = useRef(false);
   const [saving, setSaving] = useState(false);
 
@@ -198,7 +205,13 @@ export default function SaveScreen() {
       }, { onConflict: 'user_id,saved_item_id' });
 
       if (saveErr) { Alert.alert('Error', saveErr.message); return; }
-      router.replace('/(tabs)');
+      // Pop the modal to reveal the tabs underneath. replace('/(tabs)') would
+      // STACK a second copy of the tabs (the "duplicated My Spots page" bug).
+      if (router.canGoBack()) {
+        router.back();
+      } else {
+        router.replace('/(tabs)'); // cold start: no underlying screen
+      }
     } finally {
       clearTimeout(watchdog);
       isSavingRef.current = false;
