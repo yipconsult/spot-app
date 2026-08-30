@@ -1,3 +1,33 @@
+diff --git a/node_modules/expo-share-intent/plugin/build/ios/ShareExtensionViewController.swift b/node_modules/expo-share-intent/plugin/build/ios/ShareExtensionViewController.swift
+index f1f4b72..8d726bd 100644
+--- a/node_modules/expo-share-intent/plugin/build/ios/ShareExtensionViewController.swift
++++ b/node_modules/expo-share-intent/plugin/build/ios/ShareExtensionViewController.swift
+@@ -52,7 +52,24 @@ class ShareViewController: UIViewController {
+         dismissWithError(message: "No content found")
+         return
+       }
+-      for (index, attachment) in (attachments).enumerated() {
++      // PATCH (spot-app): Spot only needs URL + text. Instagram reels attach
++      // the full video — copying it into the App Group container is slow and
++      // can hang the extension (freezing the host app). Skip media attachments
++      // whenever URL/text/propertyList content is present.
++      let hasLinkContent = attachments.contains {
++        $0.hasItemConformingToTypeIdentifier(self.urlContentType) ||
++        $0.hasItemConformingToTypeIdentifier(self.textContentType) ||
++        $0.hasItemConformingToTypeIdentifier(self.propertyListType)
++      }
++      let relevantAttachments = hasLinkContent
++        ? attachments.filter {
++          $0.hasItemConformingToTypeIdentifier(self.urlContentType) ||
++          $0.hasItemConformingToTypeIdentifier(self.textContentType) ||
++          $0.hasItemConformingToTypeIdentifier(self.propertyListType)
++        }
++        : attachments
++      // END PATCH
++      for (index, attachment) in (relevantAttachments).enumerated() {
+         if attachment.hasItemConformingToTypeIdentifier(imageContentType) {
+           await handleImages(content: content, attachment: attachment, index: index)
+         } else if attachment.hasItemConformingToTypeIdentifier(videoContentType) {
 diff --git a/node_modules/expo-share-intent/plugin/build/ios/writeIosShareExtensionFiles.js b/node_modules/expo-share-intent/plugin/build/ios/writeIosShareExtensionFiles.js
 index 9ceec1c..662778f 100644
 --- a/node_modules/expo-share-intent/plugin/build/ios/writeIosShareExtensionFiles.js

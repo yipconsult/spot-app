@@ -69,16 +69,25 @@ export default function SaveScreen() {
     }
   }, []);
 
-  // T6: if the app is backgrounded mid-parse, the request may be cancelled.
-  // On return, hint the user to retry if nothing arrived.
+  // T6 + B: if the app is backgrounded mid-parse, the request may be
+  // cancelled by iOS suspending the JS runtime. On return to foreground,
+  // auto-retry the parse (self-healing) if nothing arrived.
   useEffect(() => {
     const sub = AppState.addEventListener('change', (state) => {
-      if (state === 'active' && isParsingRef.current) {
-        setParseHint('Parsing may have been interrupted while the app was in the background. Tap "Parse & Edit" again if no result appears.');
+      if (state !== 'active') return;
+      if (isParsingRef.current) {
+        // Parse still flagged in-flight but likely dead — the 30s timeout
+        // in handleParseWithText will clear it and the retry below picks up.
+        setParseHint('Resuming the interrupted parse…');
+        return;
+      }
+      if (url && !result) {
+        console.log('[SaveScreen] Foreground — auto-retrying interrupted parse');
+        handleParseWithText(url);
       }
     });
     return () => sub.remove();
-  }, []);
+  }, [url, result, handleParseWithText]);
 
   // When navigated from a share, pre-fill the URL and auto-parse.
   // (30s timeout + re-entry lock in handleParseWithText protect against
