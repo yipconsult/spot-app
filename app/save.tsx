@@ -35,11 +35,16 @@ export default function SaveScreen() {
   const lastFilledUrl = useRef<string | null>(null);
   const isSavingRef = useRef(false);
   const isParsingRef = useRef(false);
+  const parseGenerationRef = useRef(0);
+  const interruptedRef = useRef(false);
   const [saving, setSaving] = useState(false);
 
-  // Parse with re-entry lock + 30s timeout so a hung edge function can't wedge the screen
-  const handleParseWithText = useCallback(async (parseUrl: string, sharedText?: string) => {
-    if (isParsingRef.current) return; // re-entry lock
+  // Parse with generation counter + 30s timeout.
+  // Each parse claims a new generation; stale parses (e.g. killed by iOS
+  // backgrounding) can never overwrite a newer parse's state.
+  const handleParseWithText = useCallback(async (parseUrl: string, sharedText?: string, force = false) => {
+    if (isParsingRef.current && !force) return; // re-entry lock (force bypasses for interrupted retries)
+    const gen = ++parseGenerationRef.current;
     isParsingRef.current = true;
     setParsing(true);
     const cleanUrl = normalizeUrl(parseUrl);
@@ -53,9 +58,11 @@ export default function SaveScreen() {
       const { data: fnData, error: fnError } = outcome as { data: unknown; error: unknown };
       if (fnError) throw fnError;
       const data = fnData as Record<string, unknown>;
+      if (gen !== parseGenerationRef.current) return; // stale — a newer parse owns the screen
       setResult(data as unknown as ParseResult);
       setParseHint((data.parse_hint as string) || null);
     } catch (err: any) {
+      if (gen !== parseGenerationRef.current) return; // stale failure — ignore
       setParseHint('Something went wrong. Check your connection and try again, or fill in details manually.');
       setResult({
         name_original: null, name_en: null,
@@ -64,30 +71,29 @@ export default function SaveScreen() {
         tags: [], raw_text: parseUrl.trim(),
       });
     } finally {
-      setParsing(false);
-      isParsingRef.current = false;
+      if (gen === parseGenerationRef.current) {
+        setParsing(false);
+        isParsingRef.current = false;
+      }
     }
   }, []);
 
-  // T6 + B: if the app is backgrounded mid-parse, the request may be
-  // cancelled by iOS suspending the JS runtime. On return to foreground,
-  // auto-retry the parse (self-healing) if nothing arrived.
+  // Self-healing: backgrounding mid-parse lets iOS kill the fetch. On return
+  // to foreground, abandon the dead parse and retry automatically.
+  // Cannot loop: each retry requires a background→active transition.
   useEffect(() => {
     const sub = AppState.addEventListener('change', (state) => {
-      if (state !== 'active') return;
-      if (isParsingRef.current) {
-        // Parse still flagged in-flight but likely dead — the 30s timeout
-        // in handleParseWithText will clear it and the retry below picks up.
-        setParseHint('Resuming the interrupted parse…');
-        return;
+      if (state === 'background' && isParsingRef.current) {
+        interruptedRef.current = true;
       }
-      if (url && !result) {
-        console.log('[SaveScreen] Foreground — auto-retrying interrupted parse');
-        handleParseWithText(url);
+      if (state === 'active' && interruptedRef.current) {
+        interruptedRef.current = false;
+        console.log('[SaveScreen] Foreground — retrying interrupted parse');
+        if (url) handleParseWithText(url, undefined, true);
       }
     });
     return () => sub.remove();
-  }, [url, result, handleParseWithText]);
+  }, [url, handleParseWithText]);
 
   // When navigated from a share, pre-fill the URL and auto-parse.
   // (30s timeout + re-entry lock in handleParseWithText protect against
