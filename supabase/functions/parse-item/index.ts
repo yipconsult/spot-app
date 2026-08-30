@@ -1,5 +1,5 @@
 // Main handler — wires all modules together
-import { supabase, normalizeUrl } from './config.ts';
+import { supabase, normalizeUrl, PARSE_VERSION } from './config.ts';
 import { detectPlatform, extractInstagramMeta, fetchOembed, fetchAndScrapeHtml } from './platforms.ts';
 import { extractFromGoogleMapsUrl, resolveGoogleMapsShortLink, resolveOpenRiceShortLink } from './maps.ts';
 import { extractTextFromThumbnail } from './vision.ts';
@@ -33,7 +33,12 @@ Deno.serve(async (req) => {
       existing = data;
     }
 
-    if (existing) {
+    // Serve cache only when written by the CURRENT parse logic version.
+    // Older rows (pre-versioning or previous versions) are re-parsed and
+    // overwritten — this kills the "old cached data" class of bugs.
+    const cacheVersion = (existing?.parsed_json as Record<string, unknown> | null)?.cache_version;
+    if (existing && cacheVersion === PARSE_VERSION) {
+      console.log(`[Cache] Hit for ${normalizedUrl.slice(0, 60)} (v${PARSE_VERSION})`);
       return new Response(JSON.stringify({
         name_original: existing.name_original,
         name_en: existing.name_en,
@@ -46,6 +51,9 @@ Deno.serve(async (req) => {
         raw_text: existing.raw_text,
         cached: true,
       }), { headers: { "Content-Type": "application/json" } });
+    }
+    if (existing) {
+      console.log(`[Cache] Stale entry (version mismatch) — re-parsing`);
     }
 
     // ── 2. Build prompt text ────────────────────────────────
@@ -379,10 +387,10 @@ Deno.serve(async (req) => {
           price_hint: parsed.price_hint || null,
           tags: parsed.tags || [],
           raw_text: parsed.raw_text || promptText,
-          parsed_json: { thumbnail_url: thumbnailUrl || null },
-        }, { onConflict: "source_url", ignoreDuplicates: true })
-        .then(() => console.log(`[Cache] Upserted: ${url.slice(0, 80)}`))
-        .catch((err: any) => console.log(`[Cache] Upsert skipped (already exists): ${err?.message}`));
+          parsed_json: { thumbnail_url: thumbnailUrl || null, cache_version: PARSE_VERSION },
+        }, { onConflict: "source_url" }) // update on conflict so stale-version rows get overwritten
+        .then(() => console.log(`[Cache] Upserted: ${normalizedUrl.slice(0, 80)} (v${PARSE_VERSION})`))
+        .catch((err: any) => console.log(`[Cache] Upsert failed: ${err?.message}`));
     }
 
     // ── 6. Build error hint ──────────────────────────────────

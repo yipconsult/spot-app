@@ -8,6 +8,10 @@ export const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 export const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 export const FB_APP_TOKEN = Deno.env.get("FB_APP_TOKEN") || "";
 
+// Cache version — bump whenever the parsing logic changes materially.
+// Cached rows from older versions are re-parsed and overwritten on next request.
+export const PARSE_VERSION = "2";
+
 export const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
 /**
